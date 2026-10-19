@@ -1,0 +1,8 @@
+[package]
+name = "ob-game"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ob-engine = { path = "../engine" }

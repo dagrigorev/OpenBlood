@@ -1,0 +1,13 @@
+[package]
+name = "openblood"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ob-engine = { path = "../engine" }
+ob-game = { path = "../game" }
+png = "0.17"
+winit = "0.30"
+softbuffer = "0.4"
+cpal = "0.15"
