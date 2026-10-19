@@ -46,6 +46,36 @@ WASD / arrows move, mouse looks, left mouse or F fires, E / Enter uses, Space ju
 C / Ctrl crouches, Shift runs, 1–0 select weapons, Esc menu, F11 or Alt+Enter fullscreen,
 F5 render scale, F12 screenshot, F2 stats, `[` / `]` previous / next level.
 
+![help](screenshots/help.png)
+
+## Interface
+
+Almost clone one by one
+
+Main menu:
+
+![menu](screenshots/main_menu.png)
+
+Options:
+
+![options](screenshots/options.png)
+
+Credits:
+
+![credits](screenshots/credits.png)
+
+## Levels
+
+Here is some levels (not done yet)
+
+![lvl2](screenshots/episode2.png)
+
+![lvl22](screenshots/episode2_2.png)
+
+also, enemies positioning not completely ready 
+
+![lvl3](screenshots/episode3.png)
+
 ## Building
 
 ```
