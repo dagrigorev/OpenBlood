@@ -2,7 +2,8 @@
 
 use crate::anim::{AnimLib, SEQ_REMOVE};
 use crate::dudes::{dude_info, is_dude, Attack, DudeInfo, ProjKind};
-use crate::items::{pickup_of, Pickup};
+use crate::inventory::{InvItem, Inventory, Powerups};
+use crate::items::{pickup_of, Pickup, Timed};
 use crate::player::{Input, Player};
 use crate::resources::Resources;
 use crate::triggers::{cmd, Notice, Obj, Triggers};
@@ -15,12 +16,17 @@ use ob_engine::render::{Camera, SpriteDraw, SPR_BLOCK, SPR_CENTER, SPR_INVISIBLE
 use std::collections::HashMap;
 use std::io;
 
+mod ai;
+pub mod save;
+
 /// Game clock rate.
 pub const TICK_RATE: f64 = 120.0;
 /// Reach of the "use" action in xy units.
 pub const USE_RANGE: f64 = 768.0;
 /// Pseudo sprite id used for the player in traces.
 pub const PLAYER_ID: usize = usize::MAX;
+/// Breath before drowning starts.
+pub const AIR_SECONDS: f64 = 20.0;
 
 /// Projectile sprite types (OpenBlood-internal, outside Blood's editor ranges).
 const PROJ_BASE: i16 = 3000;
@@ -48,8 +54,14 @@ pub enum GameEvent {
     PlayerDied,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ai {
+    /// Inert until provoked (statues) or approached (buried zombies).
+    Dormant,
+    /// Playing the rise-from-the-ground animation.
+    Rise,
+    /// Running away (innocents).
+    Flee,
     Idle,
     Chase,
     Attack,
@@ -81,6 +93,19 @@ pub struct Game {
     pic_for_type: HashMap<i16, i16>,
     weapon_switch_down: bool,
     level_messages: HashMap<u32, String>,
+    pub inventory: Inventory,
+    pub powerups: Powerups,
+    /// Seconds of breath left underwater.
+    pub air: f64,
+    inv_keys: (bool, bool, bool),
+    /// Dude was hurt (ambushers/guards start moving).
+    provoked: Vec<bool>,
+    /// Cached line-of-sight to the player.
+    sees: Vec<bool>,
+    /// Damage currently being applied comes from burning.
+    burn_kill: bool,
+    /// The level-start channel has been broadcast.
+    pub started: bool,
 }
 
 /// Sprite types that are editor-only markers.
@@ -160,9 +185,16 @@ impl Game {
             pic_for_type,
             weapon_switch_down: false,
             level_messages: res.ini.map(name).map(|m| m.messages.clone()).unwrap_or_default(),
+            inventory: Inventory::default(),
+            powerups: Powerups::default(),
+            air: AIR_SECONDS,
+            inv_keys: (false, false, false),
+            provoked: vec![false; n],
+            sees: vec![false; n],
+            burn_kill: false,
+            started: false,
         };
-        g.triggers
-            .send(&mut g.world, crate::triggers::chan::LEVEL_START, cmd::ON);
+        // The level-start broadcast is sent on the player's first input (see `tick`).
         // Dudes start in their idle animation.
         for i in 0..n {
             let s = &g.world.sprites[i];
@@ -175,6 +207,7 @@ impl Game {
                     };
                     g.total_kills += if s.lotag == 245 { 0 } else { 1 };
                     g.play_dude_anim(res, i, "I1");
+                    g.ai[i] = g.initial_ai(i);
                 }
             }
         }
@@ -253,9 +286,28 @@ impl Game {
 
     fn tick(&mut self, res: &Resources, input: &Input, dt: f64) {
         self.clock += 1;
+        // Like the original, level-start events fire once the player first acts.
+        if !self.started {
+            let acted = input.forward != 0.0
+                || input.strafe != 0.0
+                || input.turn != 0.0
+                || input.fire
+                || input.alt_fire
+                || input.use_key
+                || input.jump;
+            if acted {
+                self.started = true;
+                self.triggers
+                    .send(&mut self.world, crate::triggers::chan::LEVEL_START, cmd::ON);
+            }
+        }
         if self.ai.len() < self.world.sprites.len() {
             self.ai.resize(self.world.sprites.len(), Ai::Idle);
             self.attack_cd.resize(self.world.sprites.len(), 0.0);
+        }
+        if self.provoked.len() < self.world.sprites.len() {
+            self.provoked.resize(self.world.sprites.len(), false);
+            self.sees.resize(self.world.sprites.len(), false);
         }
         let obstacles = self.obstacles();
         self.player.underwater = self
@@ -264,10 +316,11 @@ impl Game {
             .is_some_and(|x| x.underwater);
         let was_on_ground = self.player.on_ground;
         self.player.update(&self.world, input, &obstacles, dt);
+        self.room_transition();
         if !was_on_ground && self.player.on_ground {
             let v = self.player.fall_speed_peak;
             self.player.fall_speed_peak = 0.0;
-            if v > 0x18000 as f64 {
+            if v > 0x18000 as f64 && self.powerups.feather_fall <= 0.0 {
                 let dmg = ((v - 0x18000 as f64) / 1024.0) as i32;
                 self.damage_player(dmg.max(1), None);
             }
@@ -294,7 +347,8 @@ impl Game {
             self.weapon_switch_down = false;
         }
         if !self.player.dead {
-            self.tick_weapon(res, input.fire);
+            self.tick_weapon(res, input.fire, input.alt_fire);
+            self.tick_inventory(input, dt);
         }
 
         if self.player.sector != self.last_sector {
@@ -342,7 +396,13 @@ impl Game {
         let f = t.rem_euclid(1.0);
         match kind {
             0 => 1.0,
-            1 => if f < 0.5 { 1.0 } else { 0.0 },
+            1 => {
+                if f < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             2 => f,
             3 => f * f,
             4 => 1.0 - f,
@@ -350,9 +410,19 @@ impl Game {
             6..=9 => {
                 // Flicker: random, biased toward lit.
                 let r = (self.rand() % 100) as f64 / 100.0;
-                if r < 0.15 * (kind - 5) as f64 { 0.0 } else { 1.0 }
+                if r < 0.15 * (kind - 5) as f64 {
+                    0.0
+                } else {
+                    1.0
+                }
             }
-            10 => if f < 0.1 { 1.0 } else { 0.0 },
+            10 => {
+                if f < 0.1 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             11 => (1.0 - (f * 2.0 - 1.0).abs()).powi(2),
             _ => 1.0,
         }
@@ -360,7 +430,9 @@ impl Game {
 
     fn sector_lighting(&mut self) {
         for s in 0..self.world.sectors.len() {
-            let Some(x) = self.world.xsector(s).cloned() else { continue };
+            let Some(x) = self.world.xsector(s).cloned() else {
+                continue;
+            };
             if !(x.shade_floor || x.shade_ceiling || x.shade_walls) || x.amplitude == 0 {
                 continue;
             }
@@ -385,6 +457,39 @@ impl Game {
                     self.world.walls[w].shade = clamp(self.world.base_wall_shade[w]);
                 }
             }
+        }
+    }
+
+    /// Moves the player between linked rooms when their eye crosses a portal plane.
+    fn room_transition(&mut self) {
+        let p = &self.player;
+        if p.sector < 0 {
+            return;
+        }
+        let s = p.sector as usize;
+        let eye = p.z - p.eye;
+        let (c, f) = self.world.zs_at(s, p.x, p.y);
+        let link = self.world.links.get(s).copied().unwrap_or_default();
+        let target = match (link.floor, link.ceil) {
+            (Some(l), _) if eye > f => Some(l),
+            (_, Some(l)) if eye < c => Some(l),
+            _ => None,
+        };
+        let Some(l) = target else { return };
+        let (nx, ny) = (p.x + l.dx, p.y + l.dy);
+        let ns = collide::find_sector_near(&self.world.sectors, &self.world.walls, nx, ny, l.sector);
+        if ns < 0 {
+            return;
+        }
+        let p = &mut self.player;
+        p.x = nx;
+        p.y = ny;
+        p.z += l.dz;
+        p.sector = ns;
+        self.last_sector = ns;
+        let water = self.world.xsector(ns as usize).is_some_and(|x| x.underwater);
+        if water != self.player.underwater {
+            self.sound(if water { 720 } else { 721 }, None);
         }
     }
 
@@ -435,6 +540,13 @@ impl Game {
                                 self.world.sprites[i].picnum += d;
                                 let p = self.sprite_pos(i);
                                 self.sound(if st == 1 { 211 } else { 212 }, Some(p));
+                            }
+                            if is_dude(t) && st == 1 {
+                                // Triggered dudes (e.g. statues) come alive.
+                                self.provoked[i] = true;
+                                if self.ai[i] == Ai::Dormant && ai::is_statue(t) {
+                                    self.ai[i] = Ai::Idle;
+                                }
                             }
                             if t == 708 {
                                 if let Some(x) = self.world.xsprite(i) {
@@ -747,6 +859,10 @@ impl Game {
                 self.play_dude_anim(res, i, "M1");
             }
             Some(Ai::Dying) => self.ai[i] = Ai::Dead,
+            Some(Ai::Rise) => {
+                self.ai[i] = Ai::Chase;
+                self.play_dude_anim(res, i, "M1");
+            }
             _ => {}
         }
     }
@@ -766,6 +882,9 @@ impl Game {
         let d = (px - sx).hypot(py - sy);
         if d < 1.0 {
             return true;
+        }
+        if self.powerups.invisible > 0.0 && d > 1200.0 {
+            return false;
         }
         let h = collide::hitscan(
             &self.world.sectors,
@@ -788,133 +907,6 @@ impl Game {
             radius: info.radius,
             height: info.height,
             step: 0x1800 as f64,
-        }
-    }
-
-    fn tick_dudes(&mut self, res: &Resources, dt: f64) {
-        let (px, py) = (self.player.x, self.player.y);
-        for i in 0..self.world.sprites.len() {
-            let s = &self.world.sprites[i];
-            if s.statnum == stat::FREE || !is_dude(s.lotag) {
-                continue;
-            }
-            let Some(info) = dude_info(s.lotag) else { continue };
-            let ai = self.ai[i];
-            if matches!(ai, Ai::Dead | Ai::Dying) {
-                self.dude_gravity(i, &info, dt);
-                continue;
-            }
-            self.attack_cd[i] = (self.attack_cd[i] - dt).max(0.0);
-            let dist = (px - s.x as f64).hypot(py - s.y as f64);
-            match ai {
-                Ai::Idle => {
-                    if self.player.dead || dist > 12000.0 {
-                        continue;
-                    }
-                    // Sight check is costly: stagger it across ticks.
-                    if (self.clock as usize + i) % 15 != 0 {
-                        continue;
-                    }
-                    let to = (py - s.y as f64).atan2(px - s.x as f64).to_degrees() / 360.0 * 2048.0;
-                    let rel = (to - s.ang as f64 + 1024.0).rem_euclid(2048.0) - 1024.0;
-                    if (rel.abs() < 400.0 || dist < 1500.0) && self.can_see_player(i) {
-                        self.wake(res, i, &info);
-                    }
-                }
-                Ai::Chase => {
-                    if self.player.dead {
-                        self.ai[i] = Ai::Idle;
-                        self.play_dude_anim(res, i, "I1");
-                        continue;
-                    }
-                    let to = (py - s.y as f64).atan2(px - s.x as f64);
-                    self.world.sprites[i].ang = ((to.to_degrees() / 360.0 * 2048.0).rem_euclid(2048.0)) as i16;
-                    let in_range = match info.attack {
-                        Attack::Melee { range, .. } => dist < range + info.radius + crate::player::RADIUS,
-                        Attack::Hitscan { range, .. } | Attack::Projectile { range, .. } => dist < range,
-                        Attack::None => false,
-                    };
-                    let can_attack = in_range
-                        && self.attack_cd[i] <= 0.0
-                        && ((self.clock as usize + i) % 8 != 0 || self.can_see_player(i));
-                    if can_attack && info.attack != Attack::None && self.can_see_player(i) {
-                        self.ai[i] = Ai::Attack;
-                        self.attack_cd[i] = info.cooldown * (0.8 + 0.4 * (self.rand() % 100) as f64 / 100.0);
-                        if !self.play_dude_anim(res, i, "A1") {
-                            self.dude_attack(res, i);
-                            self.ai[i] = Ai::Chase;
-                        }
-                        continue;
-                    }
-                    if info.speed > 0.0 {
-                        let speed = if info.attack == Attack::None {
-                            -info.speed
-                        } else {
-                            info.speed
-                        };
-                        let (dx, dy) = (to.cos() * speed * dt, to.sin() * speed * dt);
-                        let close = matches!(info.attack, Attack::Melee { .. })
-                            && dist < info.radius + crate::player::RADIUS + 16.0;
-                        if !close {
-                            let s = &self.world.sprites[i];
-                            let m = Self::dude_mover(&info);
-                            let (nx, ny, ns, _) = collide::clip_move(
-                                &self.world.sectors,
-                                &self.world.walls,
-                                &[],
-                                s.x as f64,
-                                s.y as f64,
-                                s.z as f64,
-                                s.sectnum as i32,
-                                dx,
-                                dy,
-                                &m,
-                            );
-                            if ns >= 0 {
-                                let s = &mut self.world.sprites[i];
-                                s.x = nx.round() as i32;
-                                s.y = ny.round() as i32;
-                                s.sectnum = ns as i16;
-                            }
-                        }
-                    }
-                    if info.flying {
-                        let target = self.player.z - 0x2000 as f64;
-                        let s = &mut self.world.sprites[i];
-                        let dz = (target - s.z as f64).clamp(-0x2000 as f64 * dt, 0x2000 as f64 * dt);
-                        s.z += dz as i32;
-                    }
-                    self.dude_gravity(i, &info, dt);
-                }
-                Ai::Attack | Ai::Recoil => self.dude_gravity(i, &info, dt),
-                Ai::Dying | Ai::Dead => {}
-            }
-        }
-    }
-
-    fn wake(&mut self, res: &Resources, i: usize, info: &DudeInfo) {
-        if self.ai[i] != Ai::Idle {
-            return;
-        }
-        self.ai[i] = Ai::Chase;
-        self.play_dude_anim(res, i, "M1");
-        let p = self.sprite_pos(i);
-        self.sound_group(info.spot_sound, p);
-    }
-
-    /// Wakes dudes that can hear the player's weapon.
-    fn alert_nearby(&mut self, res: &Resources, radius: f64) {
-        for i in 0..self.world.sprites.len() {
-            let s = &self.world.sprites[i];
-            if s.statnum == stat::FREE || !is_dude(s.lotag) || self.ai[i] != Ai::Idle {
-                continue;
-            }
-            let d = (s.x as f64 - self.player.x).hypot(s.y as f64 - self.player.y);
-            if d < radius && (d < radius * 0.4 || self.can_see_player(i)) {
-                if let Some(info) = dude_info(s.lotag) {
-                    self.wake(res, i, &info);
-                }
-            }
         }
     }
 
@@ -941,7 +933,7 @@ impl Game {
         s.z = z as i32;
     }
 
-    fn dude_attack(&mut self, _res: &Resources, i: usize) {
+    fn dude_attack(&mut self, res: &Resources, i: usize) {
         let s = self.world.sprites[i].clone();
         let Some(info) = dude_info(s.lotag) else { return };
         let (sx, sy, sz) = (s.x as f64, s.y as f64, s.z as f64 - info.height * 0.6);
@@ -988,6 +980,9 @@ impl Game {
                         range,
                     );
                     match h.target {
+                        TraceTarget::Sprite(PLAYER_ID) if self.powerups.reflect > 0.0 => {
+                            self.damage_sprite(res, i, damage, false);
+                        }
                         TraceTarget::Sprite(PLAYER_ID) => self.damage_player(damage, Some(i)),
                         TraceTarget::Wall(_) | TraceTarget::Floor(_) | TraceTarget::Ceiling(_) => {
                             if self.rand() % 3 == 0 {
@@ -1017,8 +1012,55 @@ impl Game {
         }
     }
 
+    /// Inventory keys, power-up timers and breathing.
+    fn tick_inventory(&mut self, input: &Input, dt: f64) {
+        let keys = (input.inv_prev, input.inv_next, input.inv_use);
+        if keys.0 && !self.inv_keys.0 {
+            self.inventory.cycle(-1);
+        }
+        if keys.1 && !self.inv_keys.1 {
+            self.inventory.cycle(1);
+        }
+        if keys.2 && !self.inv_keys.2 {
+            let mut hp = self.player.health;
+            if let Some(item) = self.inventory.use_selected(&mut hp) {
+                self.player.health = hp;
+                let name = crate::inventory::INV_NAMES[item as usize];
+                let msg = match item {
+                    InvItem::DoctorBag => format!("Used {name}"),
+                    _ if self.inventory.active[item as usize] => format!("{name} on"),
+                    _ => format!("{name} off"),
+                };
+                self.push_message(msg);
+                self.sound(if item == InvItem::DoctorBag { 780 } else { 776 }, None);
+            }
+        }
+        self.inv_keys = keys;
+        self.inventory.tick(dt);
+        self.powerups.tick(dt);
+        self.player.jump_scale = if self.inventory.is_active(InvItem::JumpBoots) {
+            1.6
+        } else {
+            1.0
+        };
+        // Breathing.
+        let suit = self.inventory.is_active(InvItem::DivingSuit);
+        if self.player.underwater && !suit && !self.player.dead {
+            self.air -= dt;
+            if self.air < 0.0 && self.clock % 120 == 0 {
+                self.damage_player(4, None);
+                self.sound(724, None);
+            }
+        } else {
+            if self.air < AIR_SECONDS * 0.5 && !self.player.underwater {
+                self.sound(722, None);
+            }
+            self.air = AIR_SECONDS;
+        }
+    }
+
     pub fn damage_player(&mut self, amount: i32, _from: Option<usize>) {
-        if self.player.dead || amount <= 0 {
+        if self.player.dead || amount <= 0 || self.powerups.invulnerable > 0.0 {
             return;
         }
         let mut dmg = amount;
@@ -1044,6 +1086,14 @@ impl Game {
         }
     }
 
+    /// Damage that may set the target on fire.
+    pub fn damage_sprite_kind(&mut self, res: &Resources, i: usize, amount: i32, explosive: bool, fire: bool) {
+        if fire && is_dude(self.world.sprites[i].lotag) {
+            self.world.rt[i].burn_time = self.world.rt[i].burn_time.max((4.0 * TICK_RATE) as i32);
+        }
+        self.damage_sprite(res, i, amount, explosive);
+    }
+
     /// Applies damage to a sprite (dudes and destructible things).
     pub fn damage_sprite(&mut self, res: &Resources, i: usize, amount: i32, explosive: bool) {
         let s = &self.world.sprites[i];
@@ -1062,9 +1112,7 @@ impl Game {
             if self.world.rt[i].health <= 0 {
                 self.kill_dude(res, i, &info, explosive || amount >= info.health);
             } else {
-                if self.ai[i] == Ai::Idle {
-                    self.wake(res, i, &info);
-                }
+                self.provoke(res, i, &info);
                 if (self.rand() % 100) as f64 / 100.0 < info.recoil_chance && self.ai[i] != Ai::Attack {
                     if self.play_dude_anim(res, i, "R1") {
                         self.ai[i] = Ai::Recoil;
@@ -1107,7 +1155,10 @@ impl Game {
             self.kills += 1;
         }
         self.sound_group(info.die_sound, p);
-        let played = if gib {
+        let burning = self.burn_kill || self.world.rt[i].burn_time > 0;
+        let played = if burning {
+            self.play_dude_anim(res, i, "D3") || self.play_dude_anim(res, i, "D1")
+        } else if gib {
             self.play_dude_anim(res, i, "D2") || self.play_dude_anim(res, i, "D1")
         } else {
             self.play_dude_anim(res, i, "D1")
@@ -1154,6 +1205,11 @@ impl Game {
             self.ai.resize(i + 1, Ai::Idle);
             self.attack_cd.resize(i + 1, 0.0);
         }
+        if self.provoked.len() <= i {
+            self.provoked.resize(i + 1, false);
+            self.sees.resize(i + 1, false);
+        }
+        self.provoked[i] = false;
         self.ai[i] = Ai::Idle;
     }
 
@@ -1220,19 +1276,29 @@ impl Game {
     // ------------------------------------------------------------------ projectiles
 
     #[allow(clippy::too_many_arguments)]
-    fn spawn_projectile(&mut self, kind: ProjKind, x: f64, y: f64, z: f64, sect: i32, ang: f64, dz: f64, owner: i64) {
+    fn spawn_projectile(
+        &mut self,
+        kind: ProjKind,
+        x: f64,
+        y: f64,
+        z: f64,
+        sect: i32,
+        ang: f64,
+        dz: f64,
+        owner: i64,
+    ) -> Option<usize> {
         if sect < 0 {
-            return;
+            return None;
         }
         let (speed, seq) = match kind {
-            ProjKind::Flare => (2800.0, 41),
-            ProjKind::Fireball => (1800.0, 22),
-            ProjKind::Napalm => (1800.0, 22),
-            ProjKind::Tesla => (4500.0, 23),
-            ProjKind::Bone => (1500.0, 24),
-            ProjKind::Puke => (1300.0, 68),
-            ProjKind::Tnt => (1300.0, 0),
-            ProjKind::Leech => (3000.0, 23),
+            ProjKind::Flare => (7000.0, 41),
+            ProjKind::Fireball => (4500.0, 22),
+            ProjKind::Napalm => (4500.0, 22),
+            ProjKind::Tesla => (11250.0, 23),
+            ProjKind::Bone => (3750.0, 24),
+            ProjKind::Puke => (3250.0, 68),
+            ProjKind::Tnt => (2600.0, 0),
+            ProjKind::Leech => (7500.0, 23),
         };
         let s = Sprite {
             x: x as i32,
@@ -1266,6 +1332,7 @@ impl Game {
         rt.ai_timer = if kind == ProjKind::Tnt { 300 } else { 600 };
         rt.ai_state = seq;
         rt.seq = -1;
+        Some(i)
     }
 
     fn proj_kind(t: i16) -> Option<ProjKind> {
@@ -1421,14 +1488,15 @@ impl Game {
 
     // ------------------------------------------------------------------ player weapons
 
-    fn tick_weapon(&mut self, res: &Resources, fire: bool) {
+    fn tick_weapon(&mut self, res: &Resources, fire: bool, alt: bool) {
+        self.arsenal.akimbo = self.powerups.akimbo > 0.0;
         let lens: HashMap<u32, i32> = [self.arsenal.qav]
             .iter()
             .filter_map(|&q| self.anims.qav(&res.blood, q).map(|a| (q, a.length())))
             .collect();
         let lib_len = |q: u32| lens.get(&q).copied().unwrap_or(30);
         let before = (self.arsenal.state, self.arsenal.qav);
-        self.arsenal.tick(fire, lib_len);
+        self.arsenal.tick(fire, alt, lib_len);
         if (self.arsenal.state, self.arsenal.qav) != before {
             // New animation: make sure its length is known next tick.
             let _ = self.anims.qav(&res.blood, self.arsenal.qav);
@@ -1490,12 +1558,33 @@ impl Game {
         if !self.arsenal.consume() {
             return;
         }
-        let def = *self.arsenal.def();
+        let kind = self.arsenal.mode().kind;
         let (dx, dy, dz) = self.player_aim();
-        let (ex, ey, ez) = (self.player.x, self.player.y, self.player.view_z());
+        for shot in 0..self.arsenal.shots() {
+            // Dual guns fire from the left and right hand.
+            let side = if self.arsenal.shots() > 1 {
+                if shot == 0 {
+                    -24.0
+                } else {
+                    24.0
+                }
+            } else {
+                0.0
+            };
+            self.fire_once(res, kind, dx, dy, dz, side);
+        }
+    }
+
+    fn fire_once(&mut self, res: &Resources, kind: Fire, dx: f64, dy: f64, dz: f64, side: f64) {
+        let (ex, ey, ez) = (
+            self.player.x - dy * side,
+            self.player.y + dx * side,
+            self.player.view_z(),
+        );
         let sect = self.player.sector;
         let cyls = self.dude_cylinders(ex, ey);
-        match def.fire_kind {
+        let mult = self.powerups.damage_multiplier();
+        match kind {
             Fire::Melee { damage, range } | Fire::Spray { damage, range } => {
                 let h = collide::hitscan(
                     &self.world.sectors,
@@ -1511,11 +1600,12 @@ impl Game {
                     range + crate::player::RADIUS,
                 );
                 if let TraceTarget::Sprite(j) = h.target {
-                    self.damage_sprite(res, j, damage, false);
+                    let fire = matches!(kind, Fire::Spray { .. });
+                    self.damage_sprite_kind(res, j, damage * mult, false, fire);
                 } else if h.target != TraceTarget::Nothing {
                     self.sound(500, Some((h.x, h.y, h.z)));
                 }
-                if matches!(def.fire_kind, Fire::Spray { .. }) {
+                if matches!(kind, Fire::Spray { .. }) {
                     self.spawn_fx(55, ex + dx * 300.0, ey + dy * 300.0, ez + dz * 300.0, sect);
                 }
                 self.alert_nearby(res, 1200.0);
@@ -1545,7 +1635,7 @@ impl Game {
                         30000.0,
                     );
                     match h.target {
-                        TraceTarget::Sprite(j) => self.damage_sprite(res, j, damage, false),
+                        TraceTarget::Sprite(j) => self.damage_sprite(res, j, damage * mult, false),
                         TraceTarget::Wall(w) => {
                             let fx = 44 + self.rand() % 3;
                             self.spawn_fx(fx, h.x - ax * 4.0, h.y - ay * 4.0, h.z, h.sector);
@@ -1563,19 +1653,76 @@ impl Game {
                 }
                 self.alert_nearby(res, 6000.0);
             }
-            Fire::Projectile(kind) => {
+            Fire::Projectile(pk) => {
                 let ang = dy.atan2(dx);
-                self.spawn_projectile(
-                    kind,
+                self.spawn_projectile(pk, ex + dx * 64.0, ey + dy * 64.0, ez + 0x400 as f64, sect, ang, dz, -2);
+                self.alert_nearby(res, 4000.0);
+            }
+            Fire::Burst {
+                kind: pk,
+                count,
+                spread,
+            } => {
+                let base = dy.atan2(dx);
+                for k in 0..count {
+                    let f = if count > 1 {
+                        k as f64 / (count - 1) as f64 - 0.5
+                    } else {
+                        0.0
+                    };
+                    let ang = base + f * spread * 2.0;
+                    let jitter = self.randf() * 0.02;
+                    self.spawn_projectile(
+                        pk,
+                        ex + dx * 64.0,
+                        ey + dy * 64.0,
+                        ez + 0x400 as f64,
+                        sect,
+                        ang,
+                        dz + jitter,
+                        -2,
+                    );
+                }
+                self.alert_nearby(res, 5000.0);
+            }
+            Fire::Throw { fuse, power } => {
+                let ang = dy.atan2(dx);
+                if let Some(i) = self.spawn_projectile(
+                    ProjKind::Tnt,
                     ex + dx * 64.0,
                     ey + dy * 64.0,
-                    ez + 0x400 as f64,
+                    ez + 0x800 as f64,
                     sect,
                     ang,
                     dz,
                     -2,
-                );
-                self.alert_nearby(res, 4000.0);
+                ) {
+                    let rt = &mut self.world.rt[i];
+                    let scale = 0.25 + 0.75 * power;
+                    rt.vx *= scale;
+                    rt.vy *= scale;
+                    rt.vz = rt.vz * scale - 0x6000 as f64 * power;
+                    rt.ai_timer = (fuse * TICK_RATE) as i32;
+                }
+            }
+            Fire::Curse { damage } => {
+                // Hurts every dude that can see the player.
+                let targets: Vec<usize> = (0..self.world.sprites.len())
+                    .filter(|&i| {
+                        let s = &self.world.sprites[i];
+                        s.statnum != stat::FREE
+                            && is_dude(s.lotag)
+                            && !matches!(self.ai[i], Ai::Dead | Ai::Dying)
+                            && (s.x as f64 - ex).hypot(s.y as f64 - ey) < 10000.0
+                            && self.can_see_player(i)
+                    })
+                    .collect();
+                for i in targets {
+                    self.damage_sprite(res, i, damage * mult, false);
+                }
+                let left = self.arsenal.ammo[crate::weapons::ammo::VOODOO];
+                self.arsenal.ammo[crate::weapons::ammo::VOODOO] = (left - 5).max(0);
+                self.sound(463, None);
             }
         }
     }
@@ -1644,7 +1791,7 @@ impl Game {
                         Pickup::Armor { .. } => 779,
                         Pickup::Weapon { .. } => 777,
                         Pickup::Ammo { .. } => 782,
-                        Pickup::Powerup(_) => 776,
+                        Pickup::Powerup(_) | Pickup::Timed(..) | Pickup::Inventory(_) => 776,
                     };
                     self.sound(snd, None);
                     self.pickup_flash = 1.0;
@@ -1694,6 +1841,20 @@ impl Game {
             }
             Pickup::Weapon { slot, ammo } => self.arsenal.give_weapon(slot, ammo),
             Pickup::Ammo { kind, amount } => self.arsenal.add_ammo(kind, amount),
+            Pickup::Inventory(i) => self.inventory.give(i),
+            Pickup::Timed(k, secs) => {
+                let p = &mut self.powerups;
+                let t = match k {
+                    Timed::Invisible => &mut p.invisible,
+                    Timed::Invulnerable => &mut p.invulnerable,
+                    Timed::Akimbo => &mut p.akimbo,
+                    Timed::Reflect => &mut p.reflect,
+                    Timed::FeatherFall => &mut p.feather_fall,
+                    Timed::Rage => &mut p.rage,
+                };
+                *t = t.max(secs);
+                true
+            }
             Pickup::Powerup(_) => true,
         }
     }
@@ -1718,6 +1879,16 @@ impl Game {
         }
     }
 
+    /// AI state of sprite `i` (for tests and debugging).
+    pub fn ai_state(&self, i: usize) -> Option<Ai> {
+        self.ai.get(i).copied()
+    }
+
+    /// Tile used by an item type in this level (for HUD icons).
+    pub fn item_pic(&self, t: i16) -> Option<i32> {
+        self.pic_for_type.get(&t).map(|&p| p as i32)
+    }
+
     /// Current weapon QAV and its elapsed ticks, for the HUD.
     pub fn weapon_view(&self) -> (u32, i32) {
         (self.arsenal.qav, self.arsenal.qav_time)
@@ -1734,6 +1905,17 @@ impl Game {
             let mut pic = res.tiles.animate(s.picnum as i32, self.clock);
             let mut cstat = s.cstat;
             let view = res.tiles.get(pic).anm.view;
+            let voxel = if view == 6 || view == 7 {
+                res.voxel_for_tile(pic)
+            } else {
+                None
+            };
+            // Spinning voxels rotate continuously.
+            let ang = if view == 7 {
+                (s.ang as f64 + self.clock as f64 * 4.0).rem_euclid(2048.0)
+            } else {
+                s.ang as f64
+            };
             if (view == 1 || view == 2) && s.cstat & 48 == 0 {
                 let to_cam = (cam.y - s.y as f64).atan2(cam.x - s.x as f64);
                 let rel = (to_cam.to_degrees() / 360.0 * 2048.0 - s.ang as f64).rem_euclid(2048.0);
@@ -1761,8 +1943,10 @@ impl Game {
                 yrepeat: s.yrepeat,
                 xoffset: s.xoffset,
                 yoffset: s.yoffset,
-                ang: s.ang as f64,
+                ang,
                 sector: s.sectnum as i32,
+                voxel,
+                portal: 0,
             });
         }
         out

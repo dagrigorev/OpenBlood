@@ -18,7 +18,7 @@ pub struct Mover {
     pub step: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     None,
     Wall(usize),

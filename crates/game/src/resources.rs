@@ -28,6 +28,8 @@ pub struct Resources {
     pub surface: Vec<u8>,
     pub voxel_ids: Vec<i16>,
     pub ini: crate::ini::BloodIni,
+    /// Voxel models from BLOOD.RFF, indexed by KVX id.
+    pub voxels: Vec<Option<ob_engine::voxel::Voxel>>,
 }
 
 fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -81,6 +83,17 @@ impl Resources {
             .and_then(|p| std::fs::read(p).ok())
             .map(|b| crate::ini::BloodIni::parse(&String::from_utf8_lossy(&b)))
             .unwrap_or_default();
+        let mut voxels: Vec<Option<ob_engine::voxel::Voxel>> = Vec::new();
+        for e in blood.entries.iter().filter(|e| e.ext == "KVX") {
+            let id = e.id as usize;
+            if id >= 4096 {
+                continue;
+            }
+            if voxels.len() <= id {
+                voxels.resize(id + 1, None);
+            }
+            voxels[id] = blood.read(e).ok().and_then(|b| ob_engine::voxel::Voxel::parse(&b));
+        }
         Ok(Resources {
             dir,
             blood,
@@ -90,7 +103,9 @@ impl Resources {
             plu,
             trans,
             surface,
-            voxel_ids, ini,
+            voxel_ids,
+            ini,
+            voxels,
         })
     }
 
@@ -111,6 +126,12 @@ impl Resources {
             })
             .collect();
         ShadeLuts { tables }
+    }
+
+    /// Voxel model id for a tile, if the tile is drawn as a voxel.
+    pub fn voxel_for_tile(&self, pic: i32) -> Option<u32> {
+        let id = *self.voxel_ids.get(pic.max(0) as usize)?;
+        (id >= 0 && self.voxels.get(id as usize).is_some_and(|v| v.is_some())).then_some(id as u32)
     }
 
     pub fn surface_of(&self, pic: i32) -> u8 {

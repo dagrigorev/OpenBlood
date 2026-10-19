@@ -226,58 +226,73 @@ pub fn draw(
     }
     let p = &game.player;
     let have_bar = status_bar(frame, w, h, res, luts, game);
+    inventory_hud(frame, w, h, res, luts, game);
     let big = s * 2;
     if !have_bar {
-    draw_text(
-        frame,
-        w,
-        h,
-        4 * s,
-        h as i32 - 12 * s,
-        big,
-        0x00d02020,
-        &format!("{}", p.health.max(0)),
-    );
-    if p.armor.iter().any(|&a| a > 0) {
-        let txt = format!("ARMOR {}", p.armor.iter().sum::<i32>());
-        draw_text(frame, w, h, 40 * s, h as i32 - 10 * s, s, 0x004080ff, &txt);
-    }
-    // Ammo of current weapon.
-    let a = &game.arsenal;
-    let def = a.def();
-    if def.ammo != 0 {
-        let txt = format!("{}", a.ammo[def.ammo]);
-        let tw = text_width(&txt, big);
         draw_text(
             frame,
             w,
             h,
-            w as i32 - tw - 4 * s,
+            4 * s,
             h as i32 - 12 * s,
             big,
-            0x004060ff,
-            &txt,
+            0x00d02020,
+            &format!("{}", p.health.max(0)),
         );
-    }
-    // Keys.
-    let key_colors = [
-        0x00e0e0e0, 0x0040c040, 0x00ff4020, 0x00c0c0ff, 0x00a040ff, 0x00ffff60, 0x00ff80ff,
-    ];
-    for (k, &c) in key_colors.iter().enumerate() {
-        if game.player.keys[k] {
-            let x0 = (w as i32 / 2 - 28 * s) + k as i32 * 8 * s;
-            let y0 = h as i32 - 8 * s;
-            for yy in y0..y0 + 5 * s {
-                for xx in x0..x0 + 6 * s {
-                    if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
-                        frame[yy as usize * w + xx as usize] = c;
+        if p.armor.iter().any(|&a| a > 0) {
+            let txt = format!("ARMOR {}", p.armor.iter().sum::<i32>());
+            draw_text(frame, w, h, 40 * s, h as i32 - 10 * s, s, 0x004080ff, &txt);
+        }
+        // Ammo of current weapon.
+        let a = &game.arsenal;
+        let def = a.def();
+        if def.ammo != 0 {
+            let txt = format!("{}", a.ammo[def.ammo]);
+            let tw = text_width(&txt, big);
+            draw_text(
+                frame,
+                w,
+                h,
+                w as i32 - tw - 4 * s,
+                h as i32 - 12 * s,
+                big,
+                0x004060ff,
+                &txt,
+            );
+        }
+        // Keys.
+        let key_colors = [
+            0x00e0e0e0, 0x0040c040, 0x00ff4020, 0x00c0c0ff, 0x00a040ff, 0x00ffff60, 0x00ff80ff,
+        ];
+        for (k, &c) in key_colors.iter().enumerate() {
+            if game.player.keys[k] {
+                let x0 = (w as i32 / 2 - 28 * s) + k as i32 * 8 * s;
+                let y0 = h as i32 - 8 * s;
+                for yy in y0..y0 + 5 * s {
+                    for xx in x0..x0 + 6 * s {
+                        if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
+                            frame[yy as usize * w + xx as usize] = c;
+                        }
                     }
                 }
             }
         }
-    }
     } else if p.armor.iter().any(|&a| a > 0) {
-        tile_text(frame, w, h, res, luts, 3, &format!("ARMOR {}", p.armor.iter().sum::<i32>()), 72.0, 190.0, Anchor::Left, 1.0, 0, 0);
+        tile_text(
+            frame,
+            w,
+            h,
+            res,
+            luts,
+            3,
+            &format!("ARMOR {}", p.armor.iter().sum::<i32>()),
+            72.0,
+            190.0,
+            Anchor::Left,
+            1.0,
+            0,
+            0,
+        );
     }
     if let Some(f) = fps {
         let txt = format!(
@@ -292,7 +307,21 @@ pub fn draw(
             draw_text(frame, w, h, (w as i32 - tw) / 2, 20 * s, s, 0x00ffffff, m);
         } else {
             let tw = tile_text_width(res, 1, m, 1.0);
-            tile_text(frame, w, h, res, luts, 1, m, 160.0 - tw / 2.0, 14.0, Anchor::Center, 1.0, 0, 0);
+            tile_text(
+                frame,
+                w,
+                h,
+                res,
+                luts,
+                1,
+                m,
+                160.0 - tw / 2.0,
+                14.0,
+                Anchor::Center,
+                1.0,
+                0,
+                0,
+            );
         }
     }
     if p.dead {
@@ -312,7 +341,20 @@ pub enum Anchor {
 
 /// Draws tile `pic` with its top-left corner at virtual (vx, vy) (320x200 space).
 #[allow(clippy::too_many_arguments)]
-pub fn vtile(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &ShadeLuts, pic: i32, vx: f64, vy: f64, anchor: Anchor, zoom: f64, shade: i32, pal: u8) -> f64 {
+pub fn vtile(
+    frame: &mut [u32],
+    w: usize,
+    h: usize,
+    res: &Resources,
+    luts: &ShadeLuts,
+    pic: i32,
+    vx: f64,
+    vy: f64,
+    anchor: Anchor,
+    zoom: f64,
+    shade: i32,
+    pal: u8,
+) -> f64 {
     let t = res.tiles.get(pic);
     if t.is_empty() {
         return 0.0;
@@ -356,7 +398,11 @@ pub fn tile_text_width(res: &Resources, font: i32, text: &str, zoom: f64) -> f64
     text.chars()
         .map(|c| {
             let t = res.tiles.get(font_base(font) + (c as i32 - 32).clamp(0, 95));
-            if t.is_empty() { 6.0 } else { t.width as f64 + 1.0 }
+            if t.is_empty() {
+                6.0
+            } else {
+                t.width as f64 + 1.0
+            }
         })
         .sum::<f64>()
         * zoom
@@ -364,7 +410,21 @@ pub fn tile_text_width(res: &Resources, font: i32, text: &str, zoom: f64) -> f64
 
 /// Draws text with a Blood tile font; returns the width drawn.
 #[allow(clippy::too_many_arguments)]
-pub fn tile_text(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &ShadeLuts, font: i32, text: &str, vx: f64, vy: f64, anchor: Anchor, zoom: f64, shade: i32, pal: u8) -> f64 {
+pub fn tile_text(
+    frame: &mut [u32],
+    w: usize,
+    h: usize,
+    res: &Resources,
+    luts: &ShadeLuts,
+    font: i32,
+    text: &str,
+    vx: f64,
+    vy: f64,
+    anchor: Anchor,
+    zoom: f64,
+    shade: i32,
+    pal: u8,
+) -> f64 {
     let mut x = vx;
     for c in text.chars() {
         let pic = font_base(font) + (c as i32 - 32).clamp(0, 95);
@@ -381,7 +441,18 @@ pub fn tile_text(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &
 
 /// Number drawn with Blood's status digit tiles (base = tile of '0').
 #[allow(clippy::too_many_arguments)]
-fn status_number(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &ShadeLuts, base: i32, n: i32, right_x: f64, vy: f64, anchor: Anchor) {
+fn status_number(
+    frame: &mut [u32],
+    w: usize,
+    h: usize,
+    res: &Resources,
+    luts: &ShadeLuts,
+    base: i32,
+    n: i32,
+    right_x: f64,
+    vy: f64,
+    anchor: Anchor,
+) {
     let s = n.max(0).to_string();
     let dw = res.tiles.get(base).width as f64 + 1.0;
     let mut x = right_x - dw * s.len() as f64;
@@ -389,6 +460,86 @@ fn status_number(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &
         let d = c as i32 - '0' as i32;
         vtile(frame, w, h, res, luts, base + d, x, vy, anchor, 1.0, 0, 0);
         x += dw;
+    }
+}
+
+/// Inventory selection, power-up timers and breath meter.
+pub fn inventory_hud(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &ShadeLuts, game: &Game) {
+    use ob_game::inventory::{INV_ITEM_TYPES, INV_MAX, INV_NAMES};
+    let inv = &game.inventory;
+    let k = inv.selected;
+    if inv.charge[k] > 0.0 {
+        // Icon sits in the large box of the right status panel.
+        if let Some(pic) = game.item_pic(INV_ITEM_TYPES[k]) {
+            let t = res.tiles.get(pic);
+            if !t.is_empty() {
+                let zoom = (18.0 / t.width.max(t.height) as f64).min(1.0);
+                let (iw, ih) = (t.width as f64 * zoom, t.height as f64 * zoom);
+                vtile(
+                    frame,
+                    w,
+                    h,
+                    res,
+                    luts,
+                    pic,
+                    288.0 - iw / 2.0,
+                    188.0 - ih / 2.0,
+                    Anchor::Right,
+                    zoom,
+                    0,
+                    0,
+                );
+            }
+        }
+        let pct = (inv.charge[k] / INV_MAX[k] * 100.0).round() as i32;
+        let on = inv.active[k] && k != 0;
+        let label = format!("{} {}%{}", INV_NAMES[k], pct, if on { " ON" } else { "" });
+        let tw = tile_text_width(res, 3, &label, 1.0);
+        tile_text(
+            frame,
+            w,
+            h,
+            res,
+            luts,
+            3,
+            &label,
+            318.0 - tw,
+            166.0,
+            Anchor::Right,
+            1.0,
+            0,
+            0,
+        );
+    }
+    let mut y = 4.0;
+    for (name, secs) in game.powerups.list() {
+        let txt = format!("{name} {:.0}", secs.ceil());
+        let tw = tile_text_width(res, 3, &txt, 1.0);
+        tile_text(frame, w, h, res, luts, 3, &txt, 316.0 - tw, y, Anchor::Right, 1.0, 0, 0);
+        y += 8.0;
+    }
+    if game.player.underwater && game.air < ob_game::game::AIR_SECONDS {
+        let txt = if game.air > 0.0 {
+            format!("AIR {:.0}", game.air.ceil())
+        } else {
+            "DROWNING".to_string()
+        };
+        let tw = tile_text_width(res, 1, &txt, 1.0);
+        tile_text(
+            frame,
+            w,
+            h,
+            res,
+            luts,
+            1,
+            &txt,
+            160.0 - tw / 2.0,
+            150.0,
+            Anchor::Center,
+            1.0,
+            0,
+            0,
+        );
     }
 }
 
@@ -404,11 +555,33 @@ pub fn status_bar(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: 
     }
     let ly = 200.0 - left.height as f64;
     vtile(frame, w, h, res, luts, PANEL_LEFT, 0.0, ly, Anchor::Left, 1.0, 0, 0);
-    status_number(frame, w, h, res, luts, RED_DIGITS, game.player.health, 33.0, ly + 3.0, Anchor::Left);
+    status_number(
+        frame,
+        w,
+        h,
+        res,
+        luts,
+        RED_DIGITS,
+        game.player.health,
+        33.0,
+        ly + 3.0,
+        Anchor::Left,
+    );
     let a = &game.arsenal;
     let def = a.def();
     if def.ammo != 0 {
-        status_number(frame, w, h, res, luts, BLUE_DIGITS, a.ammo[def.ammo], 66.0, ly + 3.0, Anchor::Left);
+        status_number(
+            frame,
+            w,
+            h,
+            res,
+            luts,
+            BLUE_DIGITS,
+            a.ammo[def.ammo],
+            66.0,
+            ly + 3.0,
+            Anchor::Left,
+        );
     }
     let right = res.tiles.get(PANEL_RIGHT);
     if !right.is_empty() {
@@ -418,7 +591,20 @@ pub fn status_bar(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: 
         // Key icons (tiles 2220..2226 are the key symbols in the status art).
         for k in 0..7 {
             if game.player.keys[k] {
-                vtile(frame, w, h, res, luts, 2220 + k as i32, rx + 4.0 + (k % 4) as f64 * 9.0, ry + 4.0 + (k / 4) as f64 * 10.0, Anchor::Right, 1.0, 0, 0);
+                vtile(
+                    frame,
+                    w,
+                    h,
+                    res,
+                    luts,
+                    2220 + k as i32,
+                    rx + 4.0 + (k % 4) as f64 * 9.0,
+                    ry + 4.0 + (k / 4) as f64 * 10.0,
+                    Anchor::Right,
+                    1.0,
+                    0,
+                    0,
+                );
             }
         }
     }

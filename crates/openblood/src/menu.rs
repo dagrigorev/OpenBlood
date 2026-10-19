@@ -4,7 +4,13 @@ use crate::hud::{tile_text, tile_text_width, vtile, Anchor};
 use ob_engine::render::ShadeLuts;
 use ob_game::resources::Resources;
 
-pub const SKILLS: [&str; 5] = ["Still Kicking", "Pink On The Inside", "Lightly Broiled", "Well Done", "Extra Crispy"];
+pub const SKILLS: [&str; 5] = [
+    "Still Kicking",
+    "Pink On The Inside",
+    "Lightly Broiled",
+    "Well Done",
+    "Extra Crispy",
+];
 
 /// Title-screen art tile ("BLOOD" logo).
 const TITLE_TILE: i32 = 2046;
@@ -21,12 +27,17 @@ pub enum Screen {
     Options,
     Help,
     Credits,
+    Save,
+    Load,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
     None,
-    NewGame { episode: usize, skill: i32 },
+    NewGame {
+        episode: usize,
+        skill: i32,
+    },
     Resume,
     Quit,
     ToggleFullscreen,
@@ -34,6 +45,10 @@ pub enum MenuAction {
     MouseSensitivity(f64),
     ToggleAlwaysRun,
     ToggleMusic,
+    /// Save to slot 1..=5.
+    Save(usize),
+    /// Load slot (0 = quick save).
+    Load(usize),
 }
 
 pub struct Menu {
@@ -46,7 +61,13 @@ pub struct Menu {
 
 impl Menu {
     pub fn new() -> Self {
-        Menu { screen: Screen::Main, cursor: 0, episode: 0, stack: Vec::new(), in_game: false }
+        Menu {
+            screen: Screen::Main,
+            cursor: 0,
+            episode: 0,
+            stack: Vec::new(),
+            in_game: false,
+        }
     }
 
     pub fn open_pause(&mut self) {
@@ -58,10 +79,16 @@ impl Menu {
 
     fn items(&self, res: &Resources, opts: &OptionsView) -> Vec<String> {
         match self.screen {
-            Screen::Main => vec!["New Game", "Options", "Help", "Credits", "Quit"].into_iter().map(String::from).collect(),
-            Screen::Pause => vec!["Resume", "New Game", "Options", "Help", "Quit"].into_iter().map(String::from).collect(),
+            Screen::Main => MAIN_ITEMS.iter().map(|s| s.to_string()).collect(),
+            Screen::Pause => PAUSE_ITEMS.iter().map(|s| s.to_string()).collect(),
             Screen::Episode => {
-                let mut v: Vec<String> = res.ini.episodes.iter().filter(|e| !e.bloodbath_only).map(|e| e.title.clone()).collect();
+                let mut v: Vec<String> = res
+                    .ini
+                    .episodes
+                    .iter()
+                    .filter(|e| !e.bloodbath_only)
+                    .map(|e| e.title.clone())
+                    .collect();
                 if v.is_empty() {
                     v.push("Episode 1".into());
                 }
@@ -76,6 +103,12 @@ impl Menu {
                 format!("Music: {}", if opts.music { "On" } else { "Off" }),
             ],
             Screen::Help | Screen::Credits => vec![],
+            Screen::Save | Screen::Load => (0..SAVE_SLOTS)
+                .map(|k| match opts.slots.get(k).and_then(|t| t.clone()) {
+                    Some(t) => format!("{}. {}", k + 1, t),
+                    None => format!("{}. Empty", k + 1),
+                })
+                .collect(),
         }
     }
 
@@ -119,33 +152,44 @@ impl Menu {
     }
 
     pub fn select(&mut self, opts: &OptionsView) -> MenuAction {
-        let _ = opts;
+        let root = match self.screen {
+            Screen::Main => MAIN_ITEMS.get(self.cursor).copied(),
+            Screen::Pause => PAUSE_ITEMS.get(self.cursor).copied(),
+            _ => None,
+        };
+        if let Some(item) = root {
+            let next = match item {
+                "New Game" => Screen::Episode,
+                "Load Game" => Screen::Load,
+                "Save Game" => Screen::Save,
+                "Options" => Screen::Options,
+                "Help" => Screen::Help,
+                "Credits" => Screen::Credits,
+                "Resume" => return MenuAction::Resume,
+                _ => return MenuAction::Quit,
+            };
+            self.push(next);
+            return MenuAction::None;
+        }
         match (self.screen, self.cursor) {
-            (Screen::Main, 0) | (Screen::Pause, 1) => {
-                self.push(Screen::Episode);
-                MenuAction::None
+            (Screen::Save, k) => MenuAction::Save(k + 1),
+            (Screen::Load, k) => {
+                if opts.slots.get(k).is_some_and(|t| t.is_some()) {
+                    MenuAction::Load(k + 1)
+                } else {
+                    MenuAction::None
+                }
             }
-            (Screen::Main, 1) | (Screen::Pause, 2) => {
-                self.push(Screen::Options);
-                MenuAction::None
-            }
-            (Screen::Main, 2) | (Screen::Pause, 3) => {
-                self.push(Screen::Help);
-                MenuAction::None
-            }
-            (Screen::Main, 3) => {
-                self.push(Screen::Credits);
-                MenuAction::None
-            }
-            (Screen::Main, 4) | (Screen::Pause, 4) => MenuAction::Quit,
-            (Screen::Pause, 0) => MenuAction::Resume,
             (Screen::Episode, e) => {
                 self.episode = e;
                 self.push(Screen::Skill);
                 self.cursor = 2;
                 MenuAction::None
             }
-            (Screen::Skill, s) => MenuAction::NewGame { episode: self.episode, skill: s as i32 },
+            (Screen::Skill, s) => MenuAction::NewGame {
+                episode: self.episode,
+                skill: s as i32,
+            },
             (Screen::Options, 0) => MenuAction::ToggleFullscreen,
             (Screen::Options, 1) => MenuAction::ScaleChanged(if opts.scale >= 1.0 { 0.5 } else { 1.0 }),
             (Screen::Options, 3) => MenuAction::ToggleAlwaysRun,
@@ -158,7 +202,16 @@ impl Menu {
         }
     }
 
-    pub fn draw(&self, frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: &ShadeLuts, clock: f64, opts: &OptionsView) {
+    pub fn draw(
+        &self,
+        frame: &mut [u32],
+        w: usize,
+        h: usize,
+        res: &Resources,
+        luts: &ShadeLuts,
+        clock: f64,
+        opts: &OptionsView,
+    ) {
         if self.in_game {
             // Darken the game view behind the menu.
             for p in frame.iter_mut() {
@@ -169,29 +222,69 @@ impl Menu {
                 *p = 0;
             }
             if !res.tiles.get(TITLE_TILE).is_empty() && self.screen == Screen::Main {
-                vtile(frame, w, h, res, luts, TITLE_TILE, 160.0 - 160.0 * 0.5, 2.0, Anchor::Center, 0.5, 0, 0);
+                vtile(
+                    frame,
+                    w,
+                    h,
+                    res,
+                    luts,
+                    TITLE_TILE,
+                    160.0 - 160.0 * 0.5,
+                    2.0,
+                    Anchor::Center,
+                    0.5,
+                    0,
+                    0,
+                );
             } else {
-                vtile(frame, w, h, res, luts, BACKDROP_TILE, 0.0, 0.0, Anchor::Center, 1.0, 8, 0);
+                vtile(
+                    frame,
+                    w,
+                    h,
+                    res,
+                    luts,
+                    BACKDROP_TILE,
+                    0.0,
+                    0.0,
+                    Anchor::Center,
+                    1.0,
+                    8,
+                    0,
+                );
             }
         }
         match self.screen {
             Screen::Help => {
                 // The original "default keys" art is replaced by OpenBlood's own key list.
                 let lines = [
-                    "W A S D / ARROWS - MOVE",
-                    "MOUSE - LOOK AND TURN",
-                    "LEFT MOUSE / F - FIRE",
-                    "E / ENTER - USE, OPEN DOORS",
-                    "SPACE - JUMP   C / CTRL - CROUCH",
-                    "SHIFT - RUN   1-0 - WEAPONS",
+                    "W A S D / ARROWS - MOVE   MOUSE - LOOK",
+                    "LEFT MOUSE / F - FIRE   RIGHT MOUSE - ALT FIRE",
+                    "E - USE, OPEN DOORS   SPACE - JUMP",
+                    "C / CTRL - CROUCH   SHIFT - RUN",
+                    "1-0 - WEAPONS",
+                    "[ ] - SELECT ITEM   ENTER - USE ITEM",
+                    "F6 - QUICK SAVE   F9 - QUICK LOAD",
                     "F11 / ALT+ENTER - FULLSCREEN",
                     "F5 - RENDER SCALE   F12 - SCREENSHOT",
-                    "[ ] - PREVIOUS / NEXT LEVEL",
                     "ESC - MENU",
                 ];
                 for (i, l) in lines.iter().enumerate() {
                     let tw = tile_text_width(res, 0, l, 1.0);
-                    tile_text(frame, w, h, res, luts, 0, l, 160.0 - tw / 2.0, 50.0 + i as f64 * 10.0, Anchor::Center, 1.0, 0, 0);
+                    tile_text(
+                        frame,
+                        w,
+                        h,
+                        res,
+                        luts,
+                        0,
+                        l,
+                        160.0 - tw / 2.0,
+                        50.0 + i as f64 * 10.0,
+                        Anchor::Center,
+                        1.0,
+                        0,
+                        0,
+                    );
                 }
                 return;
             }
@@ -207,7 +300,21 @@ impl Menu {
                 ];
                 for (i, l) in lines.iter().enumerate() {
                     let tw = tile_text_width(res, 0, l, 1.0);
-                    tile_text(frame, w, h, res, luts, 0, l, 160.0 - tw / 2.0, 60.0 + i as f64 * 11.0, Anchor::Center, 1.0, 0, 0);
+                    tile_text(
+                        frame,
+                        w,
+                        h,
+                        res,
+                        luts,
+                        0,
+                        l,
+                        160.0 - tw / 2.0,
+                        60.0 + i as f64 * 11.0,
+                        Anchor::Center,
+                        1.0,
+                        0,
+                        0,
+                    );
                 }
                 return;
             }
@@ -218,24 +325,70 @@ impl Menu {
             Screen::Skill => "Difficulty",
             Screen::Options => "Options",
             Screen::Pause => "Paused",
+            Screen::Save => "Save Game",
+            Screen::Load => "Load Game",
             _ => "",
         };
         let items = self.items(res, opts);
         let top = if self.screen == Screen::Main { 110.0 } else { 55.0 };
         if !title.is_empty() {
             let tw = tile_text_width(res, MENU_FONT, title, 1.0);
-            tile_text(frame, w, h, res, luts, MENU_FONT, title, 160.0 - tw / 2.0, top - 30.0, Anchor::Center, 1.0, 0, 2);
+            tile_text(
+                frame,
+                w,
+                h,
+                res,
+                luts,
+                MENU_FONT,
+                title,
+                160.0 - tw / 2.0,
+                top - 30.0,
+                Anchor::Center,
+                1.0,
+                0,
+                2,
+            );
         }
         let spacing = if items.len() > 5 { 16.0 } else { 18.0 };
         for (i, it) in items.iter().enumerate() {
             let tw = tile_text_width(res, MENU_FONT, it, 1.0);
             let sel = i == self.cursor;
             // Selected entry pulses, like the original menu highlight.
-            let shade = if sel { ((clock * 8.0).sin() * 8.0 + 8.0) as i32 } else { 24 };
-            tile_text(frame, w, h, res, luts, MENU_FONT, it, 160.0 - tw / 2.0, top + i as f64 * spacing, Anchor::Center, 1.0, shade, 0);
+            let shade = if sel {
+                ((clock * 8.0).sin() * 8.0 + 8.0) as i32
+            } else {
+                24
+            };
+            tile_text(
+                frame,
+                w,
+                h,
+                res,
+                luts,
+                MENU_FONT,
+                it,
+                160.0 - tw / 2.0,
+                top + i as f64 * spacing,
+                Anchor::Center,
+                1.0,
+                shade,
+                0,
+            );
         }
     }
 }
+
+const MAIN_ITEMS: &[&str] = &["New Game", "Load Game", "Options", "Help", "Credits", "Quit"];
+const PAUSE_ITEMS: &[&str] = &[
+    "Resume",
+    "Save Game",
+    "Load Game",
+    "New Game",
+    "Options",
+    "Help",
+    "Quit",
+];
+pub const SAVE_SLOTS: usize = 5;
 
 /// Current option values shown in the options menu.
 pub struct OptionsView {
@@ -244,6 +397,8 @@ pub struct OptionsView {
     pub mouse: f64,
     pub always_run: bool,
     pub music: bool,
+    /// Titles of save slots 1..=5 (None = empty).
+    pub slots: Vec<Option<String>>,
 }
 
 impl Default for Menu {
@@ -257,7 +412,34 @@ mod tests {
     use super::*;
 
     fn opts() -> OptionsView {
-        OptionsView { fullscreen: true, scale: 1.0, mouse: 0.35, always_run: true, music: true }
+        OptionsView {
+            fullscreen: true,
+            scale: 1.0,
+            mouse: 0.35,
+            always_run: true,
+            music: true,
+            slots: vec![Some("E1M1".into()), None, None, None, None],
+        }
+    }
+
+    #[test]
+    fn save_and_load_screens() {
+        let mut m = Menu::new();
+        m.open_pause();
+        let o = opts();
+        m.cursor = 1;
+        assert_eq!(m.select(&o), MenuAction::None);
+        assert_eq!(m.screen, Screen::Save);
+        m.cursor = 2;
+        assert_eq!(m.select(&o), MenuAction::Save(3));
+        m.back();
+        m.cursor = 2;
+        m.select(&o);
+        assert_eq!(m.screen, Screen::Load);
+        m.cursor = 1;
+        assert_eq!(m.select(&o), MenuAction::None, "empty slot");
+        m.cursor = 0;
+        assert_eq!(m.select(&o), MenuAction::Load(1));
     }
 
     #[test]

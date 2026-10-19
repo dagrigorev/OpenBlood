@@ -77,6 +77,30 @@ pub struct SpriteDraw {
     pub sector: i32,
     /// Voxel model index into [`Scene::voxels`] (drawn instead of the tile).
     pub voxel: Option<u32>,
+    /// Non-zero for sprites seen through a room-over-room portal: only drawn on pixels
+    /// that show that portal (see [`portal_id`]).
+    pub portal: u32,
+}
+
+/// Id of the see-through plane of sector `s` (floor or ceiling) in the portal mask.
+pub fn portal_id(s: usize, floor: bool) -> u32 {
+    1 + s as u32 * 2 + floor as u32
+}
+
+/// Room-over-room link: looking through a floor/ceiling continues in `sector`, offset by
+/// (dx, dy, dz) (Blood's stack / link markers).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct RorLink {
+    pub sector: i32,
+    pub dx: f64,
+    pub dy: f64,
+    pub dz: f64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct Ror {
+    pub floor: Option<RorLink>,
+    pub ceil: Option<RorLink>,
 }
 
 /// True-colour shade tables, one per palookup (`pal`), each `64 * 256` entries.
@@ -108,6 +132,8 @@ pub struct Scene<'a> {
     pub clock: i32,
     /// Voxel models by id.
     pub voxels: &'a [Option<crate::voxel::Voxel>],
+    /// See-through floor/ceiling links per sector (may be empty).
+    pub ror: &'a [Ror],
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +223,8 @@ pub struct Renderer {
     pub frame: Vec<u32>,
     col_pix: Vec<u32>,
     col_depth: Vec<f32>,
+    /// Per pixel: id of the portal it was drawn through (0 = none).
+    col_mask: Vec<u32>,
     masked: Vec<Vec<MaskSeg>>,
     visited: Vec<AtomicU8>,
     /// Horizontal sky texels per full turn multiplier (tuning knob).
@@ -231,6 +259,7 @@ impl Renderer {
             frame: Vec::new(),
             col_pix: Vec::new(),
             col_depth: Vec::new(),
+            col_mask: Vec::new(),
             masked: Vec::new(),
             visited: Vec::new(),
             sky_scale: 1.0,
@@ -252,6 +281,7 @@ impl Renderer {
         self.frame = vec![0; width * height];
         self.col_pix = vec![0; width * height];
         self.col_depth = vec![f32::INFINITY; width * height];
+        self.col_mask = vec![0; width * height];
         self.masked = (0..width).map(|_| Vec::new()).collect();
     }
 
@@ -295,12 +325,54 @@ impl Renderer {
         self.col_pix
             .par_chunks_mut(h)
             .zip(self.col_depth.par_chunks_mut(h))
+            .zip(self.col_mask.par_chunks_mut(h))
             .zip(self.masked.par_iter_mut())
             .enumerate()
-            .for_each(|(x, ((pix, depth), masked))| {
+            .for_each(|(x, (((pix, depth), mask), masked))| {
                 masked.clear();
-                cast_column(x, scene, cam, &view, sky_scale, pix, depth, masked, visited);
+                mask.fill(0);
+                cast_column(x, scene, cam, &view, sky_scale, pix, depth, mask, masked, visited);
             });
+
+        // Sprites in rooms seen through floor/ceiling portals, moved into the viewer's frame.
+        let mut portal_sprites: Vec<SpriteDraw> = Vec::new();
+        let mut seen: Vec<u32> = self.col_mask.iter().copied().filter(|&m| m != 0).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        for id in seen {
+            let si = ((id - 1) / 2) as usize;
+            let floor = (id - 1) % 2 == 1;
+            let Some(r) = scene.ror.get(si) else { continue };
+            let Some(l) = (if floor { r.floor } else { r.ceil }) else {
+                continue;
+            };
+            let room = linked_room(scene, l.sector, 96);
+            for sp in scene
+                .sprites
+                .iter()
+                .filter(|sp| sp.portal == 0 && sp.sector >= 0 && room.contains(&(sp.sector as usize)))
+            {
+                portal_sprites.push(SpriteDraw {
+                    x: sp.x - l.dx,
+                    y: sp.y - l.dy,
+                    z: sp.z - l.dz,
+                    portal: id,
+                    ..*sp
+                });
+            }
+        }
+        let combined: Vec<SpriteDraw>;
+        let scene_with_portals;
+        let scene = if portal_sprites.is_empty() {
+            scene
+        } else {
+            combined = scene.sprites.iter().copied().chain(portal_sprites).collect();
+            scene_with_portals = Scene {
+                sprites: &combined,
+                ..*scene
+            };
+            &scene_with_portals
+        };
 
         self.stats_sectors = self.visited.iter().filter(|v| v.load(Ordering::Relaxed) != 0).count();
 
@@ -312,8 +384,9 @@ impl Renderer {
             .filter(|(_, s)| {
                 s.cstat & SPR_INVISIBLE == 0
                     && s.sector >= 0
-                    && (s.sector as usize) < self.visited.len()
-                    && self.visited[s.sector as usize].load(Ordering::Relaxed) != 0
+                    && (s.portal != 0
+                        || (s.sector as usize) < self.visited.len()
+                            && self.visited[s.sector as usize].load(Ordering::Relaxed) != 0)
             })
             .filter_map(|(i, s)| project_sprite(i, s, scene, cam, &view))
             .collect();
@@ -323,9 +396,10 @@ impl Renderer {
         self.col_pix
             .par_chunks_mut(h)
             .zip(self.col_depth.par_chunks(h))
+            .zip(self.col_mask.par_chunks(h))
             .zip(self.masked.par_iter_mut())
             .enumerate()
-            .for_each(|(x, ((pix, depth), masked))| {
+            .for_each(|(x, (((pix, depth), mask), masked))| {
                 masked.sort_by(|a, b| b.t.partial_cmp(&a.t).unwrap_or(std::cmp::Ordering::Equal));
                 let mut mi = 0;
                 for sp in &sprites {
@@ -333,7 +407,7 @@ impl Renderer {
                         draw_masked(x, &masked[mi], scene, cam, &view, pix, depth);
                         mi += 1;
                     }
-                    draw_sprite_column(x, sp, scene, cam, &view, pix, depth);
+                    draw_sprite_column(x, sp, scene, cam, &view, pix, depth, mask);
                 }
                 while mi < masked.len() {
                     draw_masked(x, &masked[mi], scene, cam, &view, pix, depth);
@@ -362,6 +436,7 @@ struct PlaneCtx<'a> {
     plane: &'a crate::map::Plane,
     sector: &'a Sector,
     walls: &'a [Wall],
+    link: Option<RorLink>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -373,10 +448,19 @@ fn cast_column(
     sky_scale: f64,
     pix: &mut [u32],
     depth: &mut [f32],
+    mask: &mut [u32],
     masked: &mut Vec<MaskSeg>,
     visited: &[AtomicU8],
 ) {
     let h = view.h;
+    // Marks rows drawn by a see-through plane with that portal's id.
+    let mark = |mask: &mut [u32], y0: f64, y1: f64, id: u32| {
+        let r0 = y0.max(0.0).ceil() as usize;
+        let r1 = (y1.min(h as f64).ceil() as isize).max(0) as usize;
+        for m in mask.iter_mut().take(r1).skip(r0) {
+            *m = id;
+        }
+    };
     let (dx, dy) = view.dir(x);
     let mut sect = cam.sector;
     let mut ytop = 0.0f64;
@@ -418,17 +502,20 @@ fn cast_column(
 
         let ceq = plane_eq(sec, walls, &sec.ceiling);
         let feq = plane_eq(sec, walls, &sec.floor);
+        let ror = scene.ror.get(si).copied().unwrap_or_default();
         let cctx = PlaneCtx {
             eq: ceq,
             plane: &sec.ceiling,
             sector: sec,
             walls,
+            link: ror.ceil,
         };
         let fctx = PlaneCtx {
             eq: feq,
             plane: &sec.floor,
             sector: sec,
             walls,
+            link: ror.floor,
         };
 
         let Some((t, s, wi)) = best else {
@@ -440,6 +527,12 @@ fn cast_column(
             draw_plane(
                 &fctx, scene, cam, view, sky_scale, dx, dy, x, mid, ybot, vis_s, pix, depth,
             );
+            if cctx.link.is_some() {
+                mark(mask, ytop, mid, portal_id(si, false));
+            }
+            if fctx.link.is_some() {
+                mark(mask, mid, ybot, portal_id(si, true));
+            }
             break;
         };
         let t = t.max(1e-3);
@@ -480,6 +573,12 @@ fn cast_column(
             pix,
             depth,
         );
+        if cctx.link.is_some() {
+            mark(mask, ytop, yc.min(ybot), portal_id(si, false));
+        }
+        if fctx.link.is_some() {
+            mark(mask, yf.max(ytop), ybot, portal_id(si, true));
+        }
 
         let wall = &walls[wi];
         let ns = wall.nextsector;
@@ -632,6 +731,25 @@ fn draw_plane(
     let b = p.eq.bx * dx + p.eq.by * dy;
     let lut = scene.luts.get(p.plane.pal);
 
+    if let Some(l) = p.link {
+        // Look through the plane into the linked room.
+        for y in r0..r1 {
+            let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
+            let den = k - b;
+            let t = if den.abs() > 1e-12 { (a - cam.z) / den } else { -1.0 };
+            if !(t > 0.0) {
+                pix[y] = 0;
+                depth[y] = f32::INFINITY;
+                continue;
+            }
+            let (px, py, pz) = (cam.x + dx * t + l.dx, cam.y + dy * t + l.dy, cam.z + k * t + l.dz);
+            let (c, tt) = trace_pixel(scene, l.sector, px, py, pz, dx, dy, k, t, 3);
+            pix[y] = c;
+            depth[y] = tt as f32;
+        }
+        return;
+    }
+
     if p.plane.stat & PLANE_PARALLAX != 0 {
         draw_sky(
             p, pic, scene, cam, view, sky_scale, dx, dy, x, r0, r1, a, b, lut, pix, depth,
@@ -702,6 +820,207 @@ fn draw_plane(
         pix[y] = lut[shade_index(sh) + c as usize];
         depth[y] = t as f32;
     }
+}
+
+/// Sectors reachable from `start` through open walls (bounded), i.e. one "room".
+fn linked_room(scene: &Scene, start: i32, limit: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    if start < 0 || start as usize >= scene.sectors.len() {
+        return out;
+    }
+    out.push(start as usize);
+    let mut i = 0;
+    while i < out.len() && out.len() < limit {
+        let sec = &scene.sectors[out[i]];
+        for wi in sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize {
+            let ns = scene.walls[wi].nextsector;
+            if ns >= 0 && !out.contains(&(ns as usize)) {
+                out.push(ns as usize);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Texture colour of a floor or ceiling at world point (px, py), `t` units away.
+fn sample_plane(scene: &Scene, si: usize, floor: bool, px: f64, py: f64, t: f64) -> u32 {
+    let sec = &scene.sectors[si];
+    let plane = if floor { &sec.floor } else { &sec.ceiling };
+    let lut = scene.luts.get(plane.pal);
+    let pic = scene.tiles.animate(plane.picnum as i32, scene.clock);
+    let tile = scene.tiles.get(pic);
+    let sh = shade_index(plane.shade as i32 + Renderer::vis_shade(scene.visibility as f64, t));
+    if tile.is_empty() {
+        return lut[sh];
+    }
+    let (tw, th) = (tile.width as i64, tile.height as i64);
+    let stat = plane.stat;
+    let texel = if stat & PLANE_SMOOSH != 0 { 8.0 } else { 16.0 };
+    let (mut u, mut v) = if stat & PLANE_RELATIVE != 0 && sec.wallnum >= 2 {
+        let w1 = &scene.walls[sec.wallptr as usize];
+        let w2 = &scene.walls[w1.point2 as usize];
+        let (ex, ey) = ((w2.x - w1.x) as f64, (w2.y - w1.y) as f64);
+        let l = ex.hypot(ey).max(1e-9);
+        let (ux, uy) = (ex / l, ey / l);
+        let (rx, ry) = (px - w1.x as f64, py - w1.y as f64);
+        (rx * ux + ry * uy, -rx * uy + ry * ux)
+    } else {
+        (px, py)
+    };
+    if stat & PLANE_SWAPXY != 0 {
+        std::mem::swap(&mut u, &mut v);
+    }
+    if stat & PLANE_XFLIP != 0 {
+        u = -u;
+    }
+    if stat & PLANE_YFLIP != 0 {
+        v = -v;
+    }
+    let tu = ((u / texel + plane.xpan as f64 * tw as f64 / 256.0).floor() as i64).rem_euclid(tw);
+    let tv = ((v / texel + plane.ypan as f64 * th as f64 / 256.0).floor() as i64).rem_euclid(th);
+    lut[sh + tile.pixels[(tu * th + tv) as usize] as usize]
+}
+
+/// Texture colour of a wall at position `s` (0..1 along it) and height `z`.
+#[allow(clippy::too_many_arguments)]
+fn sample_wall(scene: &Scene, wall: &Wall, picnum: i16, xpan: u8, ypan: u8, s: f64, z: f64, zref: f64, t: f64) -> u32 {
+    let lut = scene.luts.get(wall.pal);
+    let tile = scene.tiles.get(scene.tiles.animate(picnum as i32, scene.clock));
+    let sh = shade_index(wall.shade as i32 + Renderer::vis_shade(scene.visibility as f64, t));
+    if tile.is_empty() {
+        return lut[sh];
+    }
+    let (tw, th) = (tile.width as i64, tile.height as i64);
+    let mut tx = ((s * wall.xrepeat as f64 * 8.0).floor() as i64 + xpan as i64).rem_euclid(tw);
+    if wall.cstat & WALL_XFLIP != 0 {
+        tx = tw - 1 - tx;
+    }
+    let mut v = ((z - zref) * wall.yrepeat as f64 / 1024.0 + ypan as f64 * th as f64 / 256.0).floor() as i64;
+    if wall.cstat & WALL_YFLIP != 0 {
+        v = -v - 1;
+    }
+    lut[sh + tile.pixels[(tx * th + v.rem_euclid(th)) as usize] as usize]
+}
+
+/// Traces one pixel's ray through sectors starting at (ox, oy, oz) in sector `s`.
+/// `dz` is z units per xy unit; `t_base` is the distance already travelled.
+#[allow(clippy::too_many_arguments)]
+fn trace_pixel(
+    scene: &Scene,
+    mut s: i32,
+    ox: f64,
+    oy: f64,
+    oz: f64,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    t_base: f64,
+    depth: u32,
+) -> (u32, f64) {
+    let (sectors, walls) = (scene.sectors, scene.walls);
+    if s < 0 || s as usize >= sectors.len() || !crate::geom::inside_sector(sectors, walls, s as usize, ox, oy) {
+        s = crate::geom::update_sector(sectors, walls, ox, oy, s);
+    }
+    let mut t_in = 0.0f64;
+    for _ in 0..64 {
+        if s < 0 {
+            return (0, f64::INFINITY);
+        }
+        let si = s as usize;
+        let sec = &sectors[si];
+        let mut best: Option<(f64, f64, usize)> = None;
+        for wi in sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize {
+            let w1 = &walls[wi];
+            let w2 = &walls[w1.point2 as usize];
+            if let Some((t, u)) = ray_segment(ox, oy, dx, dy, w1.x as f64, w1.y as f64, w2.x as f64, w2.y as f64) {
+                if t > t_in + 1e-7 && best.is_none_or(|b| t < b.0) {
+                    best = Some((t, u, wi));
+                }
+            }
+        }
+        let t_out = best.map_or(1e9, |b| b.0);
+        let ror = scene.ror.get(si).copied().unwrap_or_default();
+        for (floor, plane) in [(false, &sec.ceiling), (true, &sec.floor)] {
+            let eq = plane_eq(sec, walls, plane);
+            let a = eq.z_at(ox, oy);
+            let b = eq.bx * dx + eq.by * dy;
+            let den = dz - b;
+            if den.abs() < 1e-12 || (floor && den < 0.0) || (!floor && den > 0.0) {
+                continue;
+            }
+            let t = (a - oz) / den;
+            if t < t_in - 1e-6 || t > t_out {
+                continue;
+            }
+            let (hx, hy, hz) = (ox + dx * t, oy + dy * t, oz + dz * t);
+            let link = if floor { ror.floor } else { ror.ceil };
+            if let (Some(l), true) = (link, depth > 0) {
+                return trace_pixel(
+                    scene,
+                    l.sector,
+                    hx + l.dx,
+                    hy + l.dy,
+                    hz + l.dz,
+                    dx,
+                    dy,
+                    dz,
+                    t_base + t,
+                    depth - 1,
+                );
+            }
+            return (sample_plane(scene, si, floor, hx, hy, t_base + t), t_base + t);
+        }
+        let Some((t, u, wi)) = best else {
+            return (0, f64::INFINITY);
+        };
+        let w = &walls[wi];
+        let hz = oz + dz * t;
+        let tt = t_base + t;
+        if w.nextsector < 0 {
+            let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 {
+                sec.floor.z
+            } else {
+                sec.ceiling.z
+            } as f64;
+            return (
+                sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
+                tt,
+            );
+        }
+        let ns = w.nextsector as usize;
+        let (c, f) = crate::geom::zs_of_slope(sectors, walls, ns, ox + dx * t, oy + dy * t);
+        if hz < c {
+            let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 {
+                sec.ceiling.z
+            } else {
+                sectors[ns].ceiling.z
+            } as f64;
+            return (
+                sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
+                tt,
+            );
+        }
+        if hz > f {
+            let src = if w.cstat & WALL_BOTTOM_SWAP != 0 && w.nextwall >= 0 {
+                &walls[w.nextwall as usize]
+            } else {
+                w
+            };
+            let zref = if src.cstat & WALL_ALIGN_BOTTOM != 0 {
+                sec.ceiling.z
+            } else {
+                sectors[ns].floor.z
+            } as f64;
+            return (
+                sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, tt),
+                tt,
+            );
+        }
+        s = ns as i32;
+        t_in = t;
+    }
+    (0, f64::INFINITY)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -889,12 +1208,21 @@ fn sprite_dims(s: &SpriteDraw, tw: f64, th: f64, anm_x: i8, anm_y: i8) -> (f64, 
     (left, tw * xs, zbot - height, zbot)
 }
 
-fn project_voxel(idx: usize, s: &SpriteDraw, id: u32, v: &crate::voxel::Voxel, cam: &Camera, view: &View) -> Option<SprProj> {
+fn project_voxel(
+    idx: usize,
+    s: &SpriteDraw,
+    id: u32,
+    v: &crate::voxel::Voxel,
+    cam: &Camera,
+    view: &View,
+) -> Option<SprProj> {
     let a = ang_to_rad(s.ang);
-    let w = (a.sin(), -a.cos());
-    let f = (a.cos(), a.sin());
-    let unit = s.xrepeat as f64 / 4.0;
-    let zunit = s.yrepeat as f64 * 4.0;
+    // KVX x runs along the sprite's facing, y across it (the flat tile's horizontal axis).
+    let w = (a.cos(), a.sin());
+    let f = (-a.sin(), a.cos());
+    // One voxel is a quarter of a sprite texel at the same repeat.
+    let unit = s.xrepeat as f64 / 16.0;
+    let zunit = s.yrepeat as f64;
     if unit <= 0.0 || zunit <= 0.0 {
         return None;
     }
@@ -945,7 +1273,17 @@ fn project_voxel(idx: usize, s: &SpriteDraw, id: u32, v: &crate::voxel::Voxel, c
     Some(SprProj {
         idx,
         depth: (s.x - cam.x).hypot(s.y - cam.y).max(depth.min(1e9)) as f32,
-        kind: SprKind::Voxel { id, sx0: x0 as f32, sx1: x1 as f32, y0: y0 as f32, y1: y1 as f32, w, f, unit, zunit },
+        kind: SprKind::Voxel {
+            id,
+            sx0: x0 as f32,
+            sx1: x1 as f32,
+            y0: y0 as f32,
+            y1: y1 as f32,
+            w,
+            f,
+            unit,
+            zunit,
+        },
         ztop,
         zbot,
         pic: s.picnum,
@@ -1098,8 +1436,12 @@ fn draw_sprite_column(
     view: &View,
     pix: &mut [u32],
     depth: &[f32],
+    mask: &[u32],
 ) {
     let s = &scene.sprites[sp.idx];
+    // Portal sprites only appear where their portal is visible.
+    let portal = s.portal;
+    let shown = |y: usize| portal == 0 || mask[y] == portal;
     let tile = scene.tiles.get(sp.pic);
     let tw = tile.width as i64;
     let th = tile.height as i64;
@@ -1133,7 +1475,7 @@ fn draw_sprite_column(
         let inv = th as f64 / (y1 - y0);
         let tf = t as f32;
         for y in r0..r1 {
-            if tf >= depth[y] {
+            if tf >= depth[y] || !shown(y) {
                 continue;
             }
             let mut ty = ((y as f64 + 0.5 - y0) * inv).floor() as i64;
@@ -1176,11 +1518,23 @@ fn draw_sprite_column(
                 }
             }
         }
-        SprKind::Voxel { id, sx0, sx1, y0, y1, w, f, unit, zunit } => {
+        SprKind::Voxel {
+            id,
+            sx0,
+            sx1,
+            y0,
+            y1,
+            w,
+            f,
+            unit,
+            zunit,
+        } => {
             if xc < sx0 - 1.0 || xc > sx1 + 1.0 {
                 return;
             }
-            let Some(Some(v)) = scene.voxels.get(id as usize) else { return };
+            let Some(Some(v)) = scene.voxels.get(id as usize) else {
+                return;
+            };
             let (dx, dy) = view.dir(x);
             // Ray origin and direction in model space.
             let (lx, ly) = (cam.x - s.x, cam.y - s.y);
@@ -1193,8 +1547,10 @@ fn draw_sprite_column(
             let r1 = ((y1 as f64).ceil() as isize).clamp(0, view.h as isize) as usize;
             for y in r0..r1 {
                 let dzz = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
-                let Some((t, c)) = v.cast([ox, oy, oz], [ddx, ddy, dzz / zunit]) else { continue };
-                if t <= 0.0 || t as f32 >= depth[y] {
+                let Some((t, c)) = v.cast([ox, oy, oz], [ddx, ddy, dzz / zunit]) else {
+                    continue;
+                };
+                if t <= 0.0 || t as f32 >= depth[y] || !shown(y) {
                     continue;
                 }
                 let sh = shade_index(s.shade + Renderer::vis_shade(vis, t));
@@ -1230,7 +1586,7 @@ fn draw_sprite_column(
                     continue;
                 }
                 let t = dz / k;
-                if t <= 0.0 || t as f32 >= depth[y] {
+                if t <= 0.0 || t as f32 >= depth[y] || !shown(y) {
                     continue;
                 }
                 let wx = cam.x + dx * t - s.x;
@@ -1338,6 +1694,8 @@ mod tests {
             sky_bits: 0,
             visibility: 0,
             clock: 0,
+            voxels: &[],
+            ror: &[],
         };
         let cam = Camera {
             x: 0.0,
@@ -1388,6 +1746,8 @@ mod tests {
             sky_bits: 0,
             visibility: 0,
             clock: 0,
+            voxels: &[],
+            ror: &[],
         };
         let cam = Camera {
             x: 0.0,

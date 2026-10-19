@@ -55,11 +55,14 @@ pub struct DudeInfo {
     pub recoil_chance: f64,
 }
 
+/// Dude speeds below are relative values scaled to match the measured player speed.
+const SPEED_SCALE: f64 = 3.0;
+
 const fn d(seq_base: u32, health: i32, speed: f64, radius: f64, attack: Attack) -> DudeInfo {
     DudeInfo {
         seq_base,
         health,
-        speed,
+        speed: speed * SPEED_SCALE,
         radius,
         height: 0x3000 as f64,
         flying: false,

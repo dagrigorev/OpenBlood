@@ -4,6 +4,7 @@ pub mod anim;
 pub mod dudes;
 pub mod game;
 pub mod ini;
+pub mod inventory;
 pub mod items;
 pub mod player;
 pub mod resources;

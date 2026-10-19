@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 ob-engine = { path = "../engine" }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"

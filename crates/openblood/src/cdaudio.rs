@@ -35,7 +35,12 @@ pub fn parse_cue(path: &Path) -> io::Result<(PathBuf, Vec<CueTrack>)> {
             let mut it = l.split_whitespace().skip(1);
             let number = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
             let audio = it.next().is_some_and(|m| m.eq_ignore_ascii_case("AUDIO"));
-            tracks.push(CueTrack { number, audio, index0: None, index1: 0 });
+            tracks.push(CueTrack {
+                number,
+                audio,
+                index0: None,
+                index1: 0,
+            });
         } else if up.starts_with("INDEX") {
             let mut it = l.split_whitespace().skip(1);
             let idx: u32 = it.next().and_then(|n| n.parse().ok()).unwrap_or(1);
@@ -107,7 +112,11 @@ pub fn load_wav(path: &Path) -> Option<Vec<f32>> {
         let len = u32::from_le_bytes(b[p + 4..p + 8].try_into().ok()?) as usize;
         if id == b"data" {
             let data = &b[p + 8..(p + 8 + len).min(b.len())];
-            return Some(data.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect());
+            return Some(
+                data.chunks_exact(2)
+                    .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+                    .collect(),
+            );
         }
         p += 8 + len + (len & 1);
     }

@@ -24,6 +24,8 @@ pub struct App {
     pub level_index: usize,
     pub levels: Vec<String>,
     luts: ShadeLuts,
+    luts_water: ShadeLuts,
+    luts_beast: ShadeLuts,
     renderer: Renderer,
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
@@ -48,6 +50,8 @@ pub struct App {
 impl App {
     pub fn new(cfg: Config, res: Resources, game: Game, levels: Vec<String>, level_index: usize) -> Self {
         let luts = res.build_luts(0);
+        let luts_water = res.build_luts(1);
+        let luts_beast = res.build_luts(2);
         let mut audio = if cfg.sound { Audio::new(&res).ok() } else { None };
         if let Some(a) = &mut audio {
             a.set_volumes(cfg.volume as f32, if cfg.music { cfg.music_volume as f32 } else { 0.0 });
@@ -55,6 +59,8 @@ impl App {
         App {
             cfg,
             luts,
+            luts_water,
+            luts_beast,
             res,
             game,
             level_index,
@@ -130,8 +136,14 @@ impl App {
         self.mouse_dy = 0.0;
         i.jump = self.down(KeyCode::Space);
         i.crouch = self.down(KeyCode::KeyC) || self.down(KeyCode::ControlLeft);
-        i.use_key = self.down(KeyCode::KeyE) || self.down(KeyCode::Enter);
-        i.fire = self.mouse_buttons.contains(&MouseButton::Left) || self.down(KeyCode::KeyF) || self.down(KeyCode::ControlRight);
+        i.use_key = self.down(KeyCode::KeyE);
+        let ctrl = self.down(KeyCode::ControlLeft) || self.down(KeyCode::ControlRight);
+        i.inv_prev = self.down(KeyCode::BracketLeft) && !ctrl;
+        i.inv_next = self.down(KeyCode::BracketRight) && !ctrl;
+        i.inv_use = self.down(KeyCode::Enter) && !self.down(KeyCode::AltLeft);
+        i.fire = self.mouse_buttons.contains(&MouseButton::Left)
+            || self.down(KeyCode::KeyF)
+            || self.down(KeyCode::ControlRight);
         i.alt_fire = self.mouse_buttons.contains(&MouseButton::Right);
         for (k, n) in [
             (KeyCode::Digit1, 1),
@@ -180,7 +192,11 @@ impl App {
                 self.game = g;
                 self.audio_map.clear();
                 let title = self.res.ini.map(name).map(|m| m.title.clone()).unwrap_or_default();
-                self.flash(if title.is_empty() { name.to_string() } else { format!("{name}: {title}") });
+                self.flash(if title.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{name}: {title}")
+                });
             }
             Err(e) => self.flash(format!("Cannot load {name}: {e}")),
         }
@@ -206,6 +222,52 @@ impl App {
             mouse: self.cfg.mouse_sensitivity,
             always_run: self.cfg.always_run,
             music: self.cfg.music,
+            slots: (1..=crate::menu::SAVE_SLOTS)
+                .map(|k| ob_game::game::save::slot_title(&ob_game::game::save::slot_path(&self.save_dir(), k)))
+                .collect(),
+        }
+    }
+
+    fn save_dir(&self) -> std::path::PathBuf {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("saves")))
+            .unwrap_or_else(|| std::path::PathBuf::from("saves"))
+    }
+
+    fn save_slot(&mut self, slot: usize) {
+        let map = self.game.world.map_name.clone();
+        let title = self.res.ini.map(&map).map(|m| m.title.clone()).unwrap_or_default();
+        let secs = self.game.clock / 120;
+        let label = format!("{map} {title} {}:{:02}", secs / 60, secs % 60);
+        let path = ob_game::game::save::slot_path(&self.save_dir(), slot);
+        match self.game.save_to(&path, &label) {
+            Ok(()) => self.flash(if slot == 0 {
+                "Quick saved".into()
+            } else {
+                format!("Saved to slot {slot}")
+            }),
+            Err(e) => self.flash(format!("Save failed: {e}")),
+        }
+    }
+
+    fn load_slot(&mut self, slot: usize) {
+        let path = ob_game::game::save::slot_path(&self.save_dir(), slot);
+        match ob_game::game::Game::load_from(&self.res, &path) {
+            Ok(g) => {
+                if let Some(i) = self
+                    .levels
+                    .iter()
+                    .position(|l| l.eq_ignore_ascii_case(&g.world.map_name))
+                {
+                    self.level_index = i;
+                }
+                self.game = g;
+                self.audio_map.clear();
+                self.last = Instant::now();
+                self.flash("Game loaded".into());
+            }
+            Err(e) => self.flash(format!("Load failed: {e}")),
         }
     }
 
@@ -245,8 +307,20 @@ impl App {
             MenuAction::NewGame { episode, skill } => {
                 self.cfg.skill = skill;
                 let eps: Vec<_> = self.res.ini.episodes.iter().filter(|e| !e.bloodbath_only).collect();
-                let map = eps.get(episode).and_then(|e| e.maps.first().cloned()).unwrap_or_else(|| "E1M1".into());
+                let map = eps
+                    .get(episode)
+                    .and_then(|e| e.maps.first().cloned())
+                    .unwrap_or_else(|| "E1M1".into());
                 self.load_named(&map, false);
+                self.menu = crate::menu::Menu::new();
+                self.close_menu();
+            }
+            MenuAction::Save(k) => {
+                self.save_slot(k);
+                self.close_menu();
+            }
+            MenuAction::Load(k) => {
+                self.load_slot(k);
                 self.menu = crate::menu::Menu::new();
                 self.close_menu();
             }
@@ -257,7 +331,14 @@ impl App {
             MenuAction::ToggleMusic => {
                 self.cfg.music = !self.cfg.music;
                 if let Some(a) = &mut self.audio {
-                    a.set_volumes(self.cfg.volume as f32, if self.cfg.music { self.cfg.music_volume as f32 } else { 0.0 });
+                    a.set_volumes(
+                        self.cfg.volume as f32,
+                        if self.cfg.music {
+                            self.cfg.music_volume as f32
+                        } else {
+                            0.0
+                        },
+                    );
                 }
             }
         }
@@ -312,11 +393,19 @@ impl App {
             walls: &w.walls,
             sprites: &sprites,
             tiles: &self.res.tiles,
-            luts: &self.luts,
+            luts: if self.game.inventory.is_active(ob_game::inventory::InvItem::BeastVision) {
+                &self.luts_beast
+            } else if self.game.player.underwater {
+                &self.luts_water
+            } else {
+                &self.luts
+            },
             sky_offsets: &w.sky_offsets,
             sky_bits: w.sky_bits,
             visibility: w.visibility,
             clock: self.game.clock,
+            voxels: &self.res.voxels,
+            ror: &self.game.world.ror_view,
         };
         self.renderer.render(&scene, &cam);
 
@@ -339,7 +428,8 @@ impl App {
         if self.menu_open {
             let o = self.options_view();
             let t = self.start_time.elapsed().as_secs_f64();
-            self.menu.draw(&mut self.renderer.frame, rw, rh, &self.res, &self.luts, t, &o);
+            self.menu
+                .draw(&mut self.renderer.frame, rw, rh, &self.res, &self.luts, t, &o);
         }
 
         let Some(surface) = self.surface.as_mut() else { return };
@@ -477,7 +567,9 @@ impl ApplicationHandler for App {
                                 );
                                 self.flash(format!("Saved {path}"));
                             }
-                            KeyCode::F9 => {
+                            KeyCode::F6 => self.save_slot(0),
+                            KeyCode::F9 => self.load_slot(0),
+                            KeyCode::F10 => {
                                 // Test cheat: all weapons, ammo and keys.
                                 let a = &mut self.game.arsenal;
                                 for w in 1..=10 {
@@ -490,8 +582,18 @@ impl ApplicationHandler for App {
                                 self.game.player.health = 200;
                                 self.flash("All weapons, ammo and keys".into());
                             }
-                            KeyCode::BracketRight => self.change_level(1),
-                            KeyCode::BracketLeft => self.change_level(-1),
+                            KeyCode::BracketRight
+                                if (self.keys.contains(&KeyCode::ControlLeft)
+                                    || self.keys.contains(&KeyCode::ControlRight)) =>
+                            {
+                                self.change_level(1)
+                            }
+                            KeyCode::BracketLeft
+                                if (self.keys.contains(&KeyCode::ControlLeft)
+                                    || self.keys.contains(&KeyCode::ControlRight)) =>
+                            {
+                                self.change_level(-1)
+                            }
                             _ => {}
                         }
                     }

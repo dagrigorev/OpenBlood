@@ -349,7 +349,10 @@ impl Audio {
         if n == 0 {
             return;
         }
-        let candidates = [res.dir.join("music").join(format!("TRACK{n:02}.WAV")), res.dir.join(format!("TRACK{n:02}.WAV"))];
+        let candidates = [
+            res.dir.join("music").join(format!("TRACK{n:02}.WAV")),
+            res.dir.join(format!("TRACK{n:02}.WAV")),
+        ];
         std::thread::spawn(move || {
             if let Some(samples) = candidates.iter().find_map(|p| crate::cdaudio::load_wav(p)) {
                 let mut m = mixer.lock().unwrap();

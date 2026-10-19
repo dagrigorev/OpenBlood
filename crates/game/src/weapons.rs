@@ -31,179 +31,285 @@ pub enum Fire {
         spread: f64,
     },
     Projectile(ProjKind),
+    /// Several projectiles fanned out horizontally.
+    Burst {
+        kind: ProjKind,
+        count: i32,
+        spread: f64,
+    },
+    /// Thrown explosive with a fuse (seconds) and throw strength (0..1).
+    Throw {
+        fuse: f64,
+        power: f64,
+    },
     /// Short-range flame cone.
     Spray {
         damage: i32,
         range: f64,
     },
+    /// Voodoo: damage every visible enemy.
+    Curse {
+        damage: i32,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FireMode {
+    pub qav: u32,
+    pub kind: Fire,
+    pub per_shot: i32,
+    /// Keep firing while the button is held.
+    pub auto: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct WeaponDef {
     pub name: &'static str,
     pub ammo: usize,
-    pub per_shot: i32,
     pub up: u32,
     pub idle: u32,
-    pub fire: u32,
     pub down: u32,
-    pub fire_kind: Fire,
-    /// Keep firing while the button is held.
-    pub auto: bool,
+    pub primary: FireMode,
+    pub alt: FireMode,
+    /// Dual-wield ("guns akimbo") animation set: up, idle, fire, down.
+    pub akimbo: Option<[u32; 4]>,
 }
+
+const fn mode(qav: u32, kind: Fire, per_shot: i32, auto: bool) -> FireMode {
+    FireMode {
+        qav,
+        kind,
+        per_shot,
+        auto,
+    }
+}
+
+const MELEE: Fire = Fire::Melee {
+    damage: 12,
+    range: 160.0,
+};
+
+/// Sawed-off QAVs: idle with 0 / 1 / 2 loaded barrels, first and second barrel, both, reload.
+pub const SHOT_IDLE: [u32; 3] = [51, 52, 53];
+pub const SHOT_FIRE1: u32 = 54;
+pub const SHOT_FIRE2: u32 = 55;
+pub const SHOT_RELOAD: u32 = 57;
+/// Voodoo stab animations (picked at random).
+pub const VOODOO_STABS: [u32; 4] = [103, 104, 105, 106];
 
 /// Weapon slots 1..=10 (index 0 unused).
 pub const WEAPONS: [WeaponDef; 11] = [
     WeaponDef {
         name: "",
         ammo: 0,
-        per_shot: 0,
         up: 0,
         idle: 1,
-        fire: 2,
         down: 3,
-        fire_kind: Fire::Melee { damage: 0, range: 0.0 },
-        auto: false,
+        primary: mode(2, MELEE, 0, true),
+        alt: mode(2, MELEE, 0, true),
+        akimbo: None,
     },
     WeaponDef {
         name: "Pitchfork",
         ammo: ammo::NONE,
-        per_shot: 0,
         up: 0,
         idle: 1,
-        fire: 2,
         down: 3,
-        fire_kind: Fire::Melee {
-            damage: 12,
-            range: 160.0,
-        },
-        auto: true,
+        primary: mode(2, MELEE, 0, true),
+        alt: mode(2, MELEE, 0, true),
+        akimbo: None,
     },
     WeaponDef {
         name: "Flare Pistol",
         ammo: ammo::FLARES,
-        per_shot: 1,
         up: 41,
         idle: 42,
-        fire: 43,
         down: 44,
-        fire_kind: Fire::Projectile(ProjKind::Flare),
-        auto: false,
+        primary: mode(43, Fire::Projectile(ProjKind::Flare), 1, false),
+        alt: mode(
+            43,
+            Fire::Burst {
+                kind: ProjKind::Flare,
+                count: 8,
+                spread: 0.35,
+            },
+            8,
+            false,
+        ),
+        akimbo: Some([45, 46, 47, 49]),
     },
     WeaponDef {
         name: "Sawed-off",
         ammo: ammo::SHELLS,
-        per_shot: 1,
         up: 50,
         idle: 53,
-        fire: 54,
         down: 58,
-        fire_kind: Fire::Hitscan {
-            damage: 5,
-            pellets: 12,
-            spread: 0.07,
-        },
-        auto: false,
+        primary: mode(
+            SHOT_FIRE1,
+            Fire::Hitscan {
+                damage: 5,
+                pellets: 12,
+                spread: 0.07,
+            },
+            1,
+            false,
+        ),
+        alt: mode(
+            56,
+            Fire::Hitscan {
+                damage: 5,
+                pellets: 24,
+                spread: 0.1,
+            },
+            2,
+            false,
+        ),
+        akimbo: Some([59, 60, 62, 63]),
     },
     WeaponDef {
         name: "Tommy Gun",
         ammo: ammo::BULLETS,
-        per_shot: 1,
         up: 64,
         idle: 65,
-        fire: 66,
         down: 68,
-        fire_kind: Fire::Hitscan {
-            damage: 6,
-            pellets: 1,
-            spread: 0.025,
-        },
-        auto: true,
+        primary: mode(
+            66,
+            Fire::Hitscan {
+                damage: 6,
+                pellets: 1,
+                spread: 0.025,
+            },
+            1,
+            true,
+        ),
+        alt: mode(
+            67,
+            Fire::Hitscan {
+                damage: 6,
+                pellets: 6,
+                spread: 0.12,
+            },
+            6,
+            true,
+        ),
+        akimbo: Some([69, 70, 71, 72]),
     },
     WeaponDef {
         name: "Napalm Launcher",
         ammo: ammo::GASOLINE,
-        per_shot: 1,
         up: 89,
         idle: 90,
-        fire: 91,
         down: 92,
-        fire_kind: Fire::Projectile(ProjKind::Napalm),
-        auto: false,
+        primary: mode(91, Fire::Projectile(ProjKind::Napalm), 1, false),
+        alt: mode(
+            91,
+            Fire::Burst {
+                kind: ProjKind::Napalm,
+                count: 3,
+                spread: 0.15,
+            },
+            5,
+            false,
+        ),
+        akimbo: Some([120, 121, 122, 124]),
     },
     WeaponDef {
         name: "Dynamite",
         ammo: ammo::TNT,
-        per_shot: 1,
         up: 16,
         idle: 20,
-        fire: 23,
         down: 17,
-        fire_kind: Fire::Projectile(ProjKind::Tnt),
-        auto: false,
+        primary: mode(23, Fire::Throw { fuse: 2.5, power: 1.0 }, 1, false),
+        alt: mode(22, Fire::Throw { fuse: 4.0, power: 0.15 }, 1, false),
+        akimbo: None,
     },
     WeaponDef {
         name: "Spray Can",
         ammo: ammo::SPRAY,
-        per_shot: 1,
         up: 8,
         idle: 9,
-        fire: 10,
         down: 11,
-        fire_kind: Fire::Spray {
-            damage: 3,
-            range: 900.0,
-        },
-        auto: true,
+        primary: mode(
+            10,
+            Fire::Spray {
+                damage: 3,
+                range: 900.0,
+            },
+            1,
+            true,
+        ),
+        alt: mode(14, Fire::Throw { fuse: 1.5, power: 0.8 }, 50, false),
+        akimbo: None,
     },
     WeaponDef {
         name: "Tesla Cannon",
         ammo: ammo::TESLA,
-        per_shot: 1,
         up: 74,
         idle: 75,
-        fire: 77,
         down: 81,
-        fire_kind: Fire::Projectile(ProjKind::Tesla),
-        auto: true,
+        primary: mode(77, Fire::Projectile(ProjKind::Tesla), 1, true),
+        alt: mode(
+            78,
+            Fire::Burst {
+                kind: ProjKind::Tesla,
+                count: 7,
+                spread: 0.06,
+            },
+            35,
+            false,
+        ),
+        akimbo: Some([82, 83, 84, 88]),
     },
     WeaponDef {
         name: "Life Leech",
         ammo: ammo::SOULS,
-        per_shot: 1,
         up: 111,
         idle: 112,
-        fire: 114,
         down: 119,
-        fire_kind: Fire::Projectile(ProjKind::Leech),
-        auto: true,
+        primary: mode(114, Fire::Projectile(ProjKind::Leech), 1, true),
+        alt: mode(
+            115,
+            Fire::Burst {
+                kind: ProjKind::Leech,
+                count: 5,
+                spread: 0.2,
+            },
+            5,
+            false,
+        ),
+        akimbo: None,
     },
     WeaponDef {
         name: "Voodoo Doll",
         ammo: ammo::VOODOO,
-        per_shot: 1,
         up: 100,
         idle: 101,
-        fire: 103,
         down: 109,
-        fire_kind: Fire::Hitscan {
-            damage: 20,
-            pellets: 1,
-            spread: 0.0,
-        },
-        auto: false,
+        primary: mode(
+            103,
+            Fire::Hitscan {
+                damage: 20,
+                pellets: 1,
+                spread: 0.0,
+            },
+            1,
+            false,
+        ),
+        alt: mode(107, Fire::Curse { damage: 60 }, 0, false),
+        akimbo: None,
     },
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeaponState {
     Raising,
     Ready,
     Firing,
+    Reloading,
     Lowering,
 }
 
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Arsenal {
     pub have: [bool; 11],
     pub ammo: [i32; AMMO_TYPES],
@@ -214,6 +320,13 @@ pub struct Arsenal {
     pub qav: u32,
     pub qav_time: i32,
     pub last_frame: i32,
+    /// The running attack is the alternate fire.
+    pub alt: bool,
+    /// Loaded sawed-off barrels (0..=2).
+    pub barrels: u8,
+    /// Dual-wield power-up active.
+    pub akimbo: bool,
+    rng: u32,
 }
 
 impl Default for Arsenal {
@@ -229,6 +342,10 @@ impl Default for Arsenal {
             qav: WEAPONS[1].up,
             qav_time: 0,
             last_frame: -1,
+            alt: false,
+            barrels: 2,
+            akimbo: false,
+            rng: 7,
         }
     }
 }
@@ -238,9 +355,31 @@ impl Arsenal {
         &WEAPONS[self.current]
     }
 
-    pub fn has_ammo(&self, w: usize) -> bool {
+    fn dual(&self) -> Option<[u32; 4]> {
+        if self.akimbo {
+            self.def().akimbo
+        } else {
+            None
+        }
+    }
+
+    /// The fire mode of the running (or requested) attack.
+    pub fn mode(&self) -> FireMode {
+        if self.alt {
+            self.def().alt
+        } else {
+            self.def().primary
+        }
+    }
+
+    pub fn has_ammo_for(&self, w: usize, alt: bool) -> bool {
         let d = &WEAPONS[w];
-        d.ammo == ammo::NONE || self.ammo[d.ammo] >= d.per_shot
+        let m = if alt { d.alt } else { d.primary };
+        d.ammo == ammo::NONE || self.ammo[d.ammo] >= m.per_shot.max(1)
+    }
+
+    pub fn has_ammo(&self, w: usize) -> bool {
+        self.has_ammo_for(w, false)
     }
 
     pub fn add_ammo(&mut self, kind: usize, n: i32) -> bool {
@@ -268,7 +407,8 @@ impl Arsenal {
         }
         self.pending = w;
         if self.state != WeaponState::Lowering {
-            self.start(WeaponState::Lowering, WEAPONS[self.current].down);
+            let down = self.dual().map_or(self.def().down, |d| d[3]);
+            self.start(WeaponState::Lowering, down);
         }
     }
 
@@ -277,6 +417,38 @@ impl Arsenal {
         self.qav = qav;
         self.qav_time = 0;
         self.last_frame = -1;
+    }
+
+    fn idle_qav(&self) -> u32 {
+        if let Some(d) = self.dual() {
+            return d[1];
+        }
+        if self.current == 3 {
+            return SHOT_IDLE[self.barrels.min(2) as usize];
+        }
+        self.def().idle
+    }
+
+    fn up_qav(&self) -> u32 {
+        self.dual().map_or(self.def().up, |d| d[0])
+    }
+
+    fn fire_qav(&mut self, alt: bool) -> u32 {
+        if let Some(d) = self.dual() {
+            return d[2];
+        }
+        if self.current == 3 && !alt {
+            return if self.barrels >= 2 { SHOT_FIRE1 } else { SHOT_FIRE2 };
+        }
+        if self.current == 10 && !alt {
+            self.rng = self.rng.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            return VOODOO_STABS[(self.rng >> 16) as usize % VOODOO_STABS.len()];
+        }
+        if alt {
+            self.def().alt.qav
+        } else {
+            self.def().primary.qav
+        }
     }
 
     /// Best weapon with ammo, used when the current one runs dry.
@@ -289,25 +461,53 @@ impl Arsenal {
         1
     }
 
+    fn try_fire(&mut self, alt: bool) -> bool {
+        // The sawed-off's alternate fire needs both barrels; with one loaded it fires that one.
+        let alt = alt && !(self.current == 3 && self.barrels < 2);
+        if self.has_ammo_for(self.current, alt) {
+            self.alt = alt;
+            let q = self.fire_qav(alt);
+            self.start(WeaponState::Firing, q);
+            true
+        } else if alt && self.has_ammo_for(self.current, false) {
+            self.try_fire(false)
+        } else {
+            let b = self.best_available();
+            self.select(b);
+            false
+        }
+    }
+
     /// Advances one tick. `qav_len(id)` returns the animation length in ticks.
-    /// Returns true when the fire QAV just started (the fire moment is signalled by
-    /// QAV callbacks, handled by the caller via [`Arsenal::frame_changed`]).
-    pub fn tick(&mut self, fire_held: bool, qav_len: impl Fn(u32) -> i32) -> bool {
+    /// Returns true when an attack animation just started.
+    pub fn tick(&mut self, fire_held: bool, alt_held: bool, qav_len: impl Fn(u32) -> i32) -> bool {
         self.qav_time += 1;
         let done = self.qav_time >= qav_len(self.qav);
         let mut started = false;
         match self.state {
-            WeaponState::Raising if done => self.start(WeaponState::Ready, self.def().idle),
+            WeaponState::Raising if done => {
+                let q = self.idle_qav();
+                self.start(WeaponState::Ready, q)
+            }
             WeaponState::Lowering if done => {
                 self.current = self.pending;
-                self.start(WeaponState::Raising, self.def().up);
+                let q = self.up_qav();
+                self.start(WeaponState::Raising, q);
+            }
+            WeaponState::Reloading if done => {
+                self.barrels = 2;
+                let q = self.idle_qav();
+                self.start(WeaponState::Ready, q);
             }
             WeaponState::Firing if done => {
-                if fire_held && self.def().auto && self.has_ammo(self.current) {
-                    self.start(WeaponState::Firing, self.def().fire);
-                    started = true;
+                if self.current == 3 && self.barrels == 0 && self.ammo[ammo::SHELLS] > 0 && self.dual().is_none() {
+                    self.start(WeaponState::Reloading, SHOT_RELOAD);
+                } else if (fire_held || alt_held) && self.mode().auto && self.has_ammo_for(self.current, self.alt) {
+                    let alt = self.alt;
+                    started = self.try_fire(alt);
                 } else {
-                    self.start(WeaponState::Ready, self.def().idle);
+                    let q = self.idle_qav();
+                    self.start(WeaponState::Ready, q);
                 }
             }
             WeaponState::Ready => {
@@ -315,14 +515,12 @@ impl Arsenal {
                     self.qav_time = 0; // loop idle
                     self.last_frame = -1;
                 }
-                if fire_held {
-                    if self.has_ammo(self.current) {
-                        self.start(WeaponState::Firing, self.def().fire);
-                        started = true;
-                    } else {
-                        let b = self.best_available();
-                        self.select(b);
-                    }
+                if self.current == 3 && self.barrels == 0 && self.ammo[ammo::SHELLS] > 0 {
+                    self.start(WeaponState::Reloading, SHOT_RELOAD);
+                } else if alt_held {
+                    started = self.try_fire(true);
+                } else if fire_held {
+                    started = self.try_fire(false);
                 }
             }
             _ => {}
@@ -330,17 +528,32 @@ impl Arsenal {
         started
     }
 
-    /// Consumes ammo for one shot; false if empty.
+    /// Consumes ammo for one shot of the running attack; false if empty.
     pub fn consume(&mut self) -> bool {
         let d = self.def();
-        if d.ammo == ammo::NONE {
-            return true;
+        let per = self.mode().per_shot;
+        if d.ammo != ammo::NONE {
+            if self.ammo[d.ammo] < per.max(1) {
+                return false;
+            }
+            self.ammo[d.ammo] -= per;
         }
-        if self.ammo[d.ammo] < d.per_shot {
-            return false;
+        if self.current == 3 {
+            self.barrels = self.barrels.saturating_sub(if self.alt { 2 } else { 1 });
+            if self.ammo[ammo::SHELLS] < self.barrels as i32 {
+                self.barrels = self.ammo[ammo::SHELLS] as u8;
+            }
         }
-        self.ammo[d.ammo] -= d.per_shot;
         true
+    }
+
+    /// Shots per trigger pull (dual-wielding doubles them).
+    pub fn shots(&self) -> i32 {
+        if self.dual().is_some() {
+            2
+        } else {
+            1
+        }
     }
 }
 
@@ -348,38 +561,71 @@ impl Arsenal {
 mod tests {
     use super::*;
 
+    fn ready(a: &mut Arsenal) {
+        for _ in 0..40 {
+            a.tick(false, false, |_| 10);
+        }
+    }
+
     #[test]
     fn raise_fire_and_switch() {
         let mut a = Arsenal::default();
-        let len = |_| 10;
-        for _ in 0..10 {
-            a.tick(false, len);
-        }
+        ready(&mut a);
         assert_eq!(a.state, WeaponState::Ready);
-        assert!(a.tick(true, len), "fire starts");
+        assert!(a.tick(true, false, |_| 10), "fire starts");
         assert_eq!(a.state, WeaponState::Firing);
         assert!(a.give_weapon(3, 8));
         assert_eq!(a.ammo[ammo::SHELLS], 8);
-        for _ in 0..12 {
-            a.tick(false, len);
-        }
+        ready(&mut a);
         a.select(3);
-        for _ in 0..25 {
-            a.tick(false, len);
-        }
+        ready(&mut a);
         assert_eq!(a.current, 3);
+    }
+
+    #[test]
+    fn shotgun_barrels_and_reload() {
+        let mut a = Arsenal::default();
+        a.give_weapon(3, 10);
+        ready(&mut a);
+        assert_eq!(a.current, 3);
+        assert!(a.tick(false, true, |_| 10));
+        assert_eq!(a.qav, 56, "alternate fire uses both barrels");
         assert!(a.consume());
-        assert_eq!(a.ammo[ammo::SHELLS], 7);
+        assert_eq!((a.barrels, a.ammo[ammo::SHELLS]), (0, 8));
+        for _ in 0..11 {
+            a.tick(false, false, |_| 10);
+        }
+        assert_eq!(a.state, WeaponState::Reloading);
+        ready(&mut a);
+        assert_eq!(a.barrels, 2);
+        assert!(a.tick(true, false, |_| 10));
+        assert_eq!(a.qav, SHOT_FIRE1);
+        a.consume();
+        ready(&mut a);
+        assert!(a.tick(true, false, |_| 10));
+        assert_eq!(a.qav, SHOT_FIRE2, "second barrel");
     }
 
     #[test]
     fn empty_weapon_switches_away() {
         let mut a = Arsenal::default();
-        a.have[3] = true;
-        a.current = 3;
+        a.have[4] = true;
+        a.current = 4;
         a.state = WeaponState::Ready;
-        a.tick(true, |_| 10);
+        a.tick(true, false, |_| 10);
         assert_eq!(a.state, WeaponState::Lowering);
         assert_eq!(a.pending, 1);
+    }
+
+    #[test]
+    fn akimbo_uses_dual_animations() {
+        let mut a = Arsenal::default();
+        a.give_weapon(4, 100);
+        a.akimbo = true;
+        ready(&mut a);
+        assert_eq!(a.qav, 70);
+        a.tick(true, false, |_| 10);
+        assert_eq!(a.qav, 71);
+        assert_eq!(a.shots(), 2);
     }
 }

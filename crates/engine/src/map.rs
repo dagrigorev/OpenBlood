@@ -81,7 +81,7 @@ fn i32_at(b: &[u8], o: usize) -> i32 {
     i32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default)]
 pub struct Plane {
     pub z: i32,
     pub stat: u16,
@@ -93,7 +93,7 @@ pub struct Plane {
     pub ypan: u8,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct Sector {
     pub wallptr: i16,
     pub wallnum: i16,
@@ -108,7 +108,7 @@ pub struct Sector {
     pub extra: i16,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct Wall {
     pub x: i32,
     pub y: i32,
@@ -129,7 +129,7 @@ pub struct Wall {
     pub extra: i16,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct Sprite {
     pub x: i32,
     pub y: i32,
@@ -157,7 +157,7 @@ pub struct Sprite {
     pub extra: i16,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct XSector {
     pub reference: i32,
     pub state: u8,
@@ -321,7 +321,7 @@ impl XSector {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct XWall {
     pub reference: i32,
     pub state: u8,
@@ -389,7 +389,7 @@ impl XWall {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct XSprite {
     pub reference: i32,
     pub state: u8,
@@ -516,7 +516,7 @@ impl XSprite {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct Map {
     pub version: u16,
     pub start_x: i32,

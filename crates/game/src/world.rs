@@ -2,6 +2,7 @@
 
 use ob_engine::geom;
 use ob_engine::map::{Map, Sector, Sprite, Wall, XSector, XSprite, XWall};
+use ob_engine::render::{Ror, RorLink};
 
 /// Blood status lists (sprite `statnum`).
 pub mod stat {
@@ -26,7 +27,7 @@ pub mod stat {
 }
 
 /// Per-sprite runtime data not present in the map record.
-#[derive(Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct SpriteRt {
     /// Velocity in xy units / z units per 120Hz tick.
     pub vx: f64,
@@ -45,6 +46,7 @@ pub struct SpriteRt {
     pub burn_time: i32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct World {
     pub map_name: String,
     pub sectors: Vec<Sector>,
@@ -68,6 +70,10 @@ pub struct World {
     pub base_floor_shade: Vec<i8>,
     pub base_ceil_shade: Vec<i8>,
     pub base_wall_shade: Vec<i8>,
+    /// Floor/ceiling links between stacked rooms (all marker kinds, used for movement).
+    pub links: Vec<Ror>,
+    /// The subset of links you can see through (stacks and generic links; water is opaque).
+    pub ror_view: Vec<Ror>,
 }
 
 impl World {
@@ -82,6 +88,8 @@ impl World {
             base_floor_shade: m.sectors.iter().map(|s| s.floor.shade).collect(),
             base_ceil_shade: m.sectors.iter().map(|s| s.ceiling.shade).collect(),
             base_wall_shade: m.walls.iter().map(|w| w.shade).collect(),
+            links: Vec::new(),
+            ror_view: Vec::new(),
             sectors: m.sectors,
             walls: m.walls,
             sprites: m.sprites,
@@ -106,6 +114,7 @@ impl World {
                 w.rt[i].health = x.health as i32;
             }
         }
+        w.build_links();
         w
     }
 
@@ -192,6 +201,51 @@ impl World {
             .filter(|(_, s)| s.statnum == st)
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// Pairs Blood's room-over-room markers. Odd types (7 link, 9 water, 11 stack, 13 goo)
+    /// sit in the upper room and make its floor a portal; the even partner (6, 10, 12, 14)
+    /// sits in the lower room and makes its ceiling a portal. Partners share `data1`.
+    pub fn build_links(&mut self) {
+        let n = self.sectors.len();
+        self.links = vec![Ror::default(); n];
+        self.ror_view = vec![Ror::default(); n];
+        let markers: Vec<(usize, i16, i32)> = self
+            .sprites
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s.lotag, 6 | 7 | 9..=14) && s.sectnum >= 0)
+            .map(|(i, s)| (i, s.lotag, self.xsprite(i).map_or(0, |x| x.data1)))
+            .collect();
+        for &(ui, ut, id) in markers.iter().filter(|m| m.1 % 2 == 1) {
+            let lower_type = if ut == 7 { 6 } else { ut + 1 };
+            let Some(&(li, _, _)) = markers.iter().find(|m| m.1 == lower_type && m.2 == id) else {
+                continue;
+            };
+            let (u, l) = (&self.sprites[ui], &self.sprites[li]);
+            let (us, ls) = (u.sectnum as usize, l.sectnum as usize);
+            if us >= n || ls >= n {
+                continue;
+            }
+            let down = RorLink {
+                sector: ls as i32,
+                dx: (l.x - u.x) as f64,
+                dy: (l.y - u.y) as f64,
+                dz: (l.z - u.z) as f64,
+            };
+            let up = RorLink {
+                sector: us as i32,
+                dx: -down.dx,
+                dy: -down.dy,
+                dz: -down.dz,
+            };
+            self.links[us].floor = Some(down);
+            self.links[ls].ceil = Some(up);
+            if matches!(ut, 7 | 11) {
+                self.ror_view[us].floor = Some(down);
+                self.ror_view[ls].ceil = Some(up);
+            }
+        }
     }
 
     pub fn player_start(&self, player: i32) -> Option<&Sprite> {

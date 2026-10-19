@@ -44,7 +44,10 @@ impl BloodIni {
                 if section.starts_with("EPISODE") {
                     ini.episodes.push(Episode::default());
                 } else if section != "INSTALL" {
-                    ini.maps.entry(section.clone()).or_insert_with(|| MapInfo { file: section.clone(), ..Default::default() });
+                    ini.maps.entry(section.clone()).or_insert_with(|| MapInfo {
+                        file: section.clone(),
+                        ..Default::default()
+                    });
                 }
                 continue;
             }

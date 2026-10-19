@@ -1,14 +1,40 @@
 //! Pickup items: what each Blood item type gives the player.
 
+use crate::inventory::InvItem;
 use crate::weapons::ammo;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timed {
+    Invisible,
+    Invulnerable,
+    Akimbo,
+    Reflect,
+    FeatherFall,
+    Rage,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pickup {
     Key(usize),
-    Health { amount: i32, max: i32 },
-    Armor { slot: usize, amount: i32 },
-    Weapon { slot: usize, ammo: i32 },
-    Ammo { kind: usize, amount: i32 },
+    Health {
+        amount: i32,
+        max: i32,
+    },
+    Armor {
+        slot: usize,
+        amount: i32,
+    },
+    Weapon {
+        slot: usize,
+        ammo: i32,
+    },
+    Ammo {
+        kind: usize,
+        amount: i32,
+    },
+    Inventory(InvItem),
+    Timed(Timed, f64),
+    /// Treasure and items without a gameplay effect yet.
     Powerup(&'static str),
 }
 
@@ -22,12 +48,23 @@ pub fn pickup_of(t: i16) -> Option<(Pickup, &'static str)> {
         104 => (Key(4), "Picked up Spider key"),
         105 => (Key(5), "Picked up Moon key"),
         106 => (Key(6), "Picked up key"),
-        107 => (Health { amount: 100, max: 100 }, "Picked up Doctor's Bag"),
+        107 => (Inventory(InvItem::DoctorBag), "Picked up Doctor's Bag"),
         108 => (Health { amount: 20, max: 100 }, "Picked up Medicine Pouch"),
         109 => (Health { amount: 10, max: 100 }, "Picked up Life Essence"),
         110 => (Health { amount: 100, max: 200 }, "Picked up Life Seed"),
         111 => (Health { amount: 5, max: 100 }, "Picked up Red Potion"),
-        112..=139 => (Powerup("power"), "Picked up power-up"),
+        112 => (Timed(self::Timed::FeatherFall, 30.0), "Picked up Feather Fall"),
+        113 | 126 => (Timed(self::Timed::Invisible, 30.0), "Picked up Shadow Cloak"),
+        114 | 131 => (Timed(self::Timed::Invulnerable, 30.0), "Picked up Death Mask"),
+        115 => (Inventory(InvItem::JumpBoots), "Picked up Boots of Jumping"),
+        117 => (Timed(self::Timed::Akimbo, 30.0), "Picked up Guns Akimbo"),
+        118 => (Inventory(InvItem::DivingSuit), "Picked up Diving Suit"),
+        121 => (Inventory(InvItem::CrystalBall), "Picked up Crystal Ball"),
+        124 => (Timed(self::Timed::Reflect, 30.0), "Picked up Reflective Shots"),
+        125 => (Inventory(InvItem::BeastVision), "Picked up Beast Vision"),
+        127 => (Timed(self::Timed::Rage, 30.0), "Picked up Rage Shroom"),
+        139 => (Armor { slot: 2, amount: 200 }, "Picked up Asbestos Armor"),
+        116 | 119 | 120 | 122 | 123 | 128..=130 | 132..=138 => (Powerup("treasure"), "Picked up an item"),
         140 => (Armor { slot: 0, amount: 50 }, "Picked up Basic Armor"),
         141 => (Armor { slot: 1, amount: 100 }, "Picked up Body Armor"),
         142 => (Armor { slot: 2, amount: 100 }, "Picked up Fire Armor"),
@@ -154,5 +191,10 @@ mod tests {
         );
         assert!(matches!(pickup_of(100).unwrap().0, Pickup::Key(0)));
         assert!(pickup_of(0).is_none());
+        assert_eq!(pickup_of(107).unwrap().0, Pickup::Inventory(InvItem::DoctorBag));
+        assert!(matches!(
+            pickup_of(114).unwrap().0,
+            Pickup::Timed(Timed::Invulnerable, _)
+        ));
     }
 }

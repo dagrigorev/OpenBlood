@@ -7,3 +7,4 @@ license.workspace = true
 
 [dependencies]
 rayon = "1"
+serde = { version = "1", features = ["derive"] }

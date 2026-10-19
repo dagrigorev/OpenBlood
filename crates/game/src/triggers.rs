@@ -72,7 +72,7 @@ pub const WALL_MOVE_REVERSE: u16 = 0x8000;
 
 /// Placement of a moving sector relative to its map position: translation plus a
 /// rotation by `ang` radians around (cx, cy).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 pub struct Xform {
     pub dx: f64,
     pub dy: f64,
@@ -82,7 +82,7 @@ pub struct Xform {
 }
 
 /// Change of a moving sector's transform during one update.
-#[derive(Debug, Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
 pub struct Carry {
     pub sector: usize,
     pub old: Xform,
@@ -94,7 +94,9 @@ impl Carry {
         self.new.ang - self.old.ang
     }
     pub fn is_identity(&self) -> bool {
-        (self.new.dx - self.old.dx).abs() < 1e-9 && (self.new.dy - self.old.dy).abs() < 1e-9 && self.dang().abs() < 1e-12
+        (self.new.dx - self.old.dx).abs() < 1e-9
+            && (self.new.dy - self.old.dy).abs() < 1e-9
+            && self.dang().abs() < 1e-12
     }
     /// Maps a point that moved with the sector from the old placement to the new one.
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
@@ -107,21 +109,21 @@ impl Carry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Obj {
     Sector(usize),
     Wall(usize),
     Sprite(usize),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
 struct Event {
     time: u64,
     obj: Obj,
     cmd: u8,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
 struct Busy {
     obj: Obj,
     /// Target busy value 0 or 65536.
@@ -132,7 +134,7 @@ struct Busy {
 }
 
 /// Notifications for the game layer (sounds, messages, level flow).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum Notice {
     LevelExit { secret: bool },
     SecretFound,
@@ -144,12 +146,15 @@ pub enum Notice {
     Teleport { sector: usize },
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Triggers {
     pub tick: u64,
     events: Vec<Event>,
     busy: Vec<Busy>,
+    #[serde(skip)]
     rx_index: HashMap<u32, Vec<Obj>>,
     /// Vertex groups: walls sharing a position (for moving shared vertices together).
+    #[serde(skip)]
     vertex_group: Vec<Vec<usize>>,
     pub notices: Vec<Notice>,
     /// Sector movements since the game last consumed them (to carry the player).
@@ -199,14 +204,18 @@ impl Triggers {
             secrets_total: 0,
             secrets_found: 0,
         };
-        t.reindex(world);
-        // Vertex groups by original position.
+        t.rebuild(world);
+        t
+    }
+
+    /// Recomputes lookup tables that are not saved (receive index, shared vertices).
+    pub fn rebuild(&mut self, world: &World) {
+        self.reindex(world);
         let mut by_pos: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (i, &(x, y)) in world.base_wall_xy.iter().enumerate() {
             by_pos.entry((x, y)).or_default().push(i);
         }
-        t.vertex_group = world.base_wall_xy.iter().map(|p| by_pos[p].clone()).collect();
-        t
+        self.vertex_group = world.base_wall_xy.iter().map(|p| by_pos[p].clone()).collect();
     }
 
     pub fn reindex(&mut self, world: &World) {
@@ -582,6 +591,7 @@ impl Triggers {
         match t {
             sector_type::Z_MOTION | sector_type::Z_MOTION_SPRITE => Self::apply_z(world, s, &x, f),
             sector_type::SLIDE | sector_type::SLIDE_MARKED => {
+                Self::apply_z(world, s, &x, f);
                 let m0 = x.marker0 as usize;
                 let m1 = x.marker1 as usize;
                 if m0 >= world.sprites.len() || m1 >= world.sprites.len() {
@@ -595,7 +605,17 @@ impl Triggers {
                 let dy = ((by - ay) as f64 * f).round() as i32;
                 self.translate_sector(world, s, dx, dy, t == sector_type::SLIDE_MARKED);
                 if t == sector_type::SLIDE {
-                    self.carry(world, s, Xform { dx: dx as f64, dy: dy as f64, ang: 0.0, cx: 0.0, cy: 0.0 });
+                    self.carry(
+                        world,
+                        s,
+                        Xform {
+                            dx: dx as f64,
+                            dy: dy as f64,
+                            ang: 0.0,
+                            cx: 0.0,
+                            cy: 0.0,
+                        },
+                    );
                 }
             }
             sector_type::ROTATE | sector_type::ROTATE_MARKED | sector_type::ROTATE_STEP => {
@@ -608,7 +628,17 @@ impl Triggers {
                 let a = ob_engine::geom::ang_to_rad(ang * (f - self.initial_state(world, s)));
                 self.rotate_sector(world, s, cx, cy, a, t == sector_type::ROTATE_MARKED);
                 if t != sector_type::ROTATE_MARKED {
-                    self.carry(world, s, Xform { dx: 0.0, dy: 0.0, ang: a, cx: cx as f64, cy: cy as f64 });
+                    self.carry(
+                        world,
+                        s,
+                        Xform {
+                            dx: 0.0,
+                            dy: 0.0,
+                            ang: a,
+                            cx: cx as f64,
+                            cy: cy as f64,
+                        },
+                    );
                 }
             }
             _ => {}
@@ -658,25 +688,36 @@ impl Triggers {
     }
 
     fn initial_state(&mut self, world: &World, s: usize) -> f64 {
-        *self.init_state.entry(s).or_insert_with(|| world.xsector(s).map_or(0.0, |x| x.state as f64))
+        *self
+            .init_state
+            .entry(s)
+            .or_insert_with(|| world.xsector(s).map_or(0.0, |x| x.state as f64))
     }
 
     /// Moves sprites standing in a moving sector by the change from its previous transform,
     /// and records the change so the game can carry the player too.
     fn carry(&mut self, world: &mut World, s: usize, new: Xform) {
-        let old = self.xforms.insert(s, new).unwrap_or(Xform { cx: new.cx, cy: new.cy, ..Default::default() });
+        let old = self.xforms.insert(s, new).unwrap_or(Xform {
+            cx: new.cx,
+            cy: new.cy,
+            ..Default::default()
+        });
         let d = Carry { sector: s, old, new };
         if d.is_identity() {
             return;
         }
         for sp in world.sprites.iter_mut() {
-            if sp.sectnum as usize != s || sp.statnum == crate::world::stat::FREE || sp.statnum == crate::world::stat::MARKER {
+            if sp.sectnum as usize != s
+                || sp.statnum == crate::world::stat::FREE
+                || sp.statnum == crate::world::stat::MARKER
+            {
                 continue;
             }
             let (nx, ny) = d.apply(sp.x as f64, sp.y as f64);
             sp.x = nx.round() as i32;
             sp.y = ny.round() as i32;
-            sp.ang = ((sp.ang as f64 + d.dang() * 2048.0 / std::f64::consts::TAU).round() as i32).rem_euclid(2048) as i16;
+            sp.ang =
+                ((sp.ang as f64 + d.dang() * 2048.0 / std::f64::consts::TAU).round() as i32).rem_euclid(2048) as i16;
         }
         self.carries.push(d);
     }
@@ -853,12 +894,23 @@ mod tests {
 
     #[test]
     fn carry_translates_and_rotates() {
-        let c = Carry { sector: 0, old: Xform::default(), new: Xform { dx: 10.0, dy: 0.0, ..Default::default() } };
+        let c = Carry {
+            sector: 0,
+            old: Xform::default(),
+            new: Xform {
+                dx: 10.0,
+                dy: 0.0,
+                ..Default::default()
+            },
+        };
         assert_eq!(c.apply(5.0, 5.0), (15.0, 5.0));
         let r = Carry {
             sector: 0,
             old: Xform::default(),
-            new: Xform { ang: std::f64::consts::FRAC_PI_2, ..Default::default() },
+            new: Xform {
+                ang: std::f64::consts::FRAC_PI_2,
+                ..Default::default()
+            },
         };
         let (x, y) = r.apply(10.0, 0.0);
         assert!((x - 0.0).abs() < 1e-9 && (y - 10.0).abs() < 1e-9);

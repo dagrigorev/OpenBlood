@@ -1,6 +1,7 @@
 /target
 *.png
 *.wav
+.ruff_cache/
 
 !/screenshots/
 !/screenshots/*.png

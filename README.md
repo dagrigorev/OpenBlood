@@ -20,15 +20,30 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 - Player movement and collision (sliding, steps, jumping, crouching, gravity, fall damage).
 - Blood's trigger/channel system: doors, lifts, sliding/rotating sectors, switches, wait
   timers, locks and keys, level-start broadcasts, teleporters, secrets, exits, messages.
+- Voxel models (KVX) for items and decorations, ray-cast per pixel, including spinning pickups.
+- Room-over-room links: see-through stacked floors/ceilings (per-pixel portal tracing) and
+  moving between linked rooms, including diving into water (with the original water palette),
+  with sprites in the linked room visible through the portal.
+- Sliding/rotating sectors carry sprites and the player (boats, trains, moving platforms).
 - Sector lighting effects, ambient/sector/one-shot sounds with 3D panning, CD-audio music
   ripped from your own disc image.
 - Weapons with the original QAV animations and sounds (pitchfork, flare pistol, sawed-off,
   tommy gun, napalm, dynamite, spray can, tesla, life leech, voodoo), hitscan and projectiles,
   explosions, enemy AI with original SEQ animations and voices, pickups, the original status
   bar art and menu fonts, episode/difficulty menus, INI-driven level progression.
+- Alternate fire for every weapon (double-barrel, tommy spread, flare starburst, big napalm,
+  dynamite drop, spray-can bomb, tesla charge, voodoo curse), sawed-off reload, guns akimbo.
+- Inventory (doctor's bag, diving suit, jumping boots, beast vision, crystal ball) and timed
+  power-ups (invisibility, invulnerability, akimbo, reflective shots, feather fall, rage),
+  breathing and drowning underwater.
+- Enemy behaviours: ambush / guard / deaf editor flags, hearing gunfire, ranged enemies strafe
+  instead of walking into fire, obstacle and ledge avoidance, fleeing innocents, burning enemies,
+  buried zombies rising, stone gargoyles waking when hit or triggered.
+- Save / load: quick save and five slots, deterministic restore of the whole game state.
 
-Not yet: voxels, room-over-room water links, moving path sectors (trains/boats), save/load,
-multiplayer, MIDI music fallback, cut-scene playback, the full set of enemy behaviours.
+Not yet: multiplayer, MIDI music fallback, cut-scene playback, the full set of enemy behaviours.
+Known difference: the E1M1 starting coffin room looks vertically shorter in the original;
+the cause is still being investigated.
 
 ## Setup
 
@@ -88,7 +103,8 @@ Crates: `ob-engine` (formats, geometry, collision, renderer), `ob-game` (Blood g
 `openblood` (window, input, audio, HUD, menus, developer tools).
 
 Developer tools (`openblood <tool> ...`): `rff-list`, `rff-extract`, `map-info`, `walls`,
-`sprites`, `chan`, `tile`, `sheet`, `qav`, `shot` / `shotg` (render a map to PNG), `extract-cd`.
+`sprites`, `chan`, `tile`, `sheet`, `qav`, `survey`, `find-vox`, `vox-test`, `shot` / `shotg`
+(render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera at a sprite), `extract-cd`.
 
 ## License
 

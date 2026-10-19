@@ -23,6 +23,9 @@ pub struct Input {
     pub alt_fire: bool,
     pub weapon: Option<u8>,
     pub center_view: bool,
+    pub inv_prev: bool,
+    pub inv_next: bool,
+    pub inv_use: bool,
 }
 
 pub const EYE_STAND: f64 = 0x2c00 as f64;
@@ -34,11 +37,12 @@ pub const STEP: f64 = 0x1a00 as f64;
 /// z units / s^2
 pub const GRAVITY: f64 = 0x10000 as f64 * 1.0;
 pub const JUMP_VEL: f64 = 0x8000 as f64;
-pub const WALK_SPEED: f64 = 900.0;
-pub const RUN_SPEED: f64 = 1700.0;
-pub const SWIM_SPEED: f64 = 600.0;
+/// Top speeds and responsiveness measured from the original (DOSBox video, E1M1 start).
+pub const WALK_SPEED: f64 = 4600.0;
+pub const RUN_SPEED: f64 = 5600.0;
+pub const SWIM_SPEED: f64 = 2400.0;
 
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Player {
     pub x: f64,
     pub y: f64,
@@ -66,6 +70,8 @@ pub struct Player {
     pub last_hit: Hit,
     pub sprite: i32,
     pub fall_speed_peak: f64,
+    /// Jump strength multiplier (jumping boots).
+    pub jump_scale: f64,
 }
 
 impl Player {
@@ -99,6 +105,7 @@ impl Player {
             last_hit: Hit::None,
             sprite: -1,
             fall_speed_peak: 0.0,
+            jump_scale: 1.0,
         };
         if sect >= 0 {
             let (_, f) = world.zs_at(sect as usize, x, y);
@@ -161,7 +168,7 @@ impl Player {
         let wx = (c * fwd - s * strafe) * speed;
         let wy = (s * fwd + c * strafe) * speed;
         // Ground control vs air control.
-        let accel = if self.on_ground || self.underwater { 10.0 } else { 1.5 };
+        let accel = if self.on_ground || self.underwater { 20.0 } else { 3.0 };
         let k = (accel * dt).min(1.0);
         self.vx += (wx - self.vx) * k;
         self.vy += (wy - self.vy) * k;
@@ -176,7 +183,7 @@ impl Player {
                 self.vz *= 1.0 - (dt * 3.0).min(1.0);
             }
         } else if input.jump && !self.jump_was_down && self.on_ground {
-            self.vz = -JUMP_VEL;
+            self.vz = -JUMP_VEL * self.jump_scale;
             self.on_ground = false;
         }
         self.jump_was_down = input.jump;
@@ -211,7 +218,7 @@ impl Player {
 
         let moving = (self.vx * self.vx + self.vy * self.vy).sqrt();
         if self.on_ground && moving > 50.0 {
-            self.bob_phase += dt * moving / 90.0;
+            self.bob_phase += dt * moving / 450.0;
             self.bob_amp = (moving / RUN_SPEED * 384.0).min(384.0);
         } else {
             self.bob_amp *= 1.0 - (dt * 8.0).min(1.0);
@@ -224,7 +231,7 @@ impl Player {
         if self.sector < 0 {
             return;
         }
-        let (cz, _, fz, _) = collide::get_z_range(
+        let (mut cz, cs, mut fz, fs) = collide::get_z_range(
             &world.sectors,
             &world.walls,
             self.x,
@@ -234,6 +241,13 @@ impl Player {
             RADIUS,
             STEP,
         );
+        // Floors/ceilings linked to another room are passable.
+        if fs >= 0 && world.links.get(fs as usize).is_some_and(|l| l.floor.is_some()) {
+            fz = f64::MAX / 4.0;
+        }
+        if cs >= 0 && world.links.get(cs as usize).is_some_and(|l| l.ceil.is_some()) {
+            cz = f64::MIN / 4.0;
+        }
         if !self.underwater {
             self.vz += GRAVITY * dt;
         }

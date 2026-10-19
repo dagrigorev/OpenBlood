@@ -69,6 +69,15 @@ pub fn shot(args: &[String]) {
             yoffset: s.yoffset,
             ang: s.ang as f64,
             sector: s.sectnum as i32,
+            voxel: {
+                let v = res.tiles.get(s.picnum as i32).anm.view;
+                if v == 6 || v == 7 {
+                    res.voxel_for_tile(s.picnum as i32)
+                } else {
+                    None
+                }
+            },
+            portal: 0,
         })
         .collect();
     let sprites: Vec<SpriteDraw> = if std::env::var("NOSPR").is_ok() {
@@ -87,6 +96,8 @@ pub fn shot(args: &[String]) {
         sky_bits: map.sky_bits as i32,
         visibility: map.visibility,
         clock: 0,
+        voxels: &res.voxels,
+        ror: &[],
     };
     let mut r = Renderer::new(w, h);
     if let Ok(v) = std::env::var("YSTRETCH") {
@@ -191,13 +202,83 @@ pub fn run_tool(args: &[String]) -> bool {
             let (w, h): (usize, usize) = (args[5].parse().unwrap(), args[6].parse().unwrap());
             let secs: f64 = args[7].parse().unwrap();
             let input = ob_game::player::Input::default();
+            if std::env::var("OB_GIVE").is_ok() {
+                use ob_game::inventory::InvItem;
+                for it in [InvItem::DoctorBag, InvItem::DivingSuit, InvItem::JumpBoots] {
+                    g.inventory.give(it);
+                }
+                g.powerups.akimbo = 25.0;
+                g.powerups.invulnerable = 12.0;
+                g.arsenal.give_weapon(4, 200);
+            }
             let mut t = 0.0;
+            if std::env::var("OB_ACT").is_ok() {
+                // A tiny turn counts as the player's first action (starts the level).
+                let nudge = ob_game::player::Input {
+                    turn: 0.001,
+                    ..Default::default()
+                };
+                g.update(&res, &nudge, 1.0 / 60.0);
+            }
             while t < secs {
                 g.update(&res, &input, 1.0 / 60.0);
                 t += 1.0 / 60.0;
             }
             let luts = res.build_luts(0);
-            let cam = g.camera();
+            let mut cam = g.camera();
+            if let Ok(v) = std::env::var("OB_CAM") {
+                let p: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                cam.x = p[0];
+                cam.y = p[1];
+                cam.ang = p[3];
+                cam.sector = ob_engine::geom::update_sector(&g.world.sectors, &g.world.walls, cam.x, cam.y, -1);
+                let (_, f) = g.world.zs_at(cam.sector.max(0) as usize, cam.x, cam.y);
+                cam.z = if p[2] != 0.0 { p[2] } else { f - 0x2c00 as f64 };
+            }
+            if let Some(e) = std::env::var("OB_EYE").ok().and_then(|v| v.parse::<f64>().ok()) {
+                cam.z = g.player.z - e;
+            }
+            // OB_LOOKAT=sprite[,distance[,angle offset]] puts the camera in front of a sprite.
+            if let Ok(v) = std::env::var("OB_LOOKAT") {
+                let p: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                let sp = &g.world.sprites[p[0] as usize];
+                eprintln!(
+                    "target sprite: stat={} cstat={:#x} pic={} sect={} z={} rep={}x{}",
+                    sp.statnum, sp.cstat, sp.picnum, sp.sectnum, sp.z, sp.xrepeat, sp.yrepeat
+                );
+                let dist = p.get(1).copied().unwrap_or(600.0);
+                // Pick the first of 8 directions with a clear line of sight to the sprite.
+                let base = sp.ang as f64 + p.get(2).copied().unwrap_or(0.0);
+                let (sx, sy, sz) = (sp.x as f64, sp.y as f64, sp.z as f64 - 0x1000 as f64);
+                let off = (0..8)
+                    .map(|k| base + k as f64 * 256.0)
+                    .find(|&a| {
+                        let r = ob_engine::geom::ang_to_rad(a);
+                        let h = ob_engine::collide::hitscan(
+                            &g.world.sectors,
+                            &g.world.walls,
+                            &[],
+                            sx,
+                            sy,
+                            sz,
+                            sp.sectnum as i32,
+                            r.cos(),
+                            r.sin(),
+                            0.0,
+                            dist + 64.0,
+                        );
+                        h.dist >= dist + 32.0
+                    })
+                    .unwrap_or(base);
+                let a = ob_engine::geom::ang_to_rad(off);
+                cam.x = sp.x as f64 + a.cos() * dist;
+                cam.y = sp.y as f64 + a.sin() * dist;
+                cam.ang = (off + 1024.0).rem_euclid(2048.0);
+                cam.sector =
+                    ob_engine::geom::update_sector(&g.world.sectors, &g.world.walls, cam.x, cam.y, sp.sectnum as i32);
+                cam.z = sp.z as f64 - 0x2000 as f64;
+                cam.horiz = 35.0;
+            }
             let sprites = g.sprite_draws(&res, &cam);
             let scene = Scene {
                 sectors: &g.world.sectors,
@@ -209,9 +290,16 @@ pub fn run_tool(args: &[String]) -> bool {
                 sky_bits: g.world.sky_bits,
                 visibility: g.world.visibility,
                 clock: g.clock,
+                voxels: &res.voxels,
+                ror: &g.world.ror_view,
             };
             let mut r = Renderer::new(w, h);
             r.render(&scene, &cam);
+            let t0 = std::time::Instant::now();
+            for _ in 0..10 {
+                r.render(&scene, &cam);
+            }
+            eprintln!("render {:?}/frame at {}x{}", t0.elapsed() / 10, w, h);
             if let Some(q) = args.get(8).and_then(|v| v.parse::<u32>().ok()) {
                 let qt: i32 = args.get(9).and_then(|v| v.parse().ok()).unwrap_or(0);
                 if let Some(qav) = g.anims.qav(&res.blood, q) {
@@ -220,7 +308,17 @@ pub fn run_tool(args: &[String]) -> bool {
             }
             if args.get(8).is_none() {
                 let q = g.anims.qav(&res.blood, g.weapon_view().0);
-                crate::hud::draw(&mut r.frame, w, h, &res, &luts, &g, q.as_deref(), None, Some("Picked up Sawed-off"));
+                crate::hud::draw(
+                    &mut r.frame,
+                    w,
+                    h,
+                    &res,
+                    &luts,
+                    &g,
+                    q.as_deref(),
+                    None,
+                    Some("Picked up Sawed-off"),
+                );
             }
             save_png(&args[4], w, h, &r.frame);
             println!("cam {:?}", cam);
@@ -246,16 +344,22 @@ pub fn run_tool(args: &[String]) -> bool {
             let lut = luts.get(0);
             for k in 0..n {
                 let t = res.tiles.get(a + k as i32);
-                if t.is_empty() { continue; }
+                if t.is_empty() {
+                    continue;
+                }
                 let (ox, oy) = ((k % cols) * cw, (k / cols) * ch);
                 let sc = (t.width.max(t.height) as f64 / 62.0).max(1.0);
-                for y in 0..ch { for x in 0..cw {
-                    let (tx, ty) = ((x as f64 * sc) as usize, (y as f64 * sc) as usize);
-                    if tx < t.width as usize && ty < t.height as usize {
-                        let c = t.pixels[tx * t.height as usize + ty];
-                        if c != 255 { frame[(oy + y) * w + ox + x] = lut[c as usize]; }
+                for y in 0..ch {
+                    for x in 0..cw {
+                        let (tx, ty) = ((x as f64 * sc) as usize, (y as f64 * sc) as usize);
+                        if tx < t.width as usize && ty < t.height as usize {
+                            let c = t.pixels[tx * t.height as usize + ty];
+                            if c != 255 {
+                                frame[(oy + y) * w + ox + x] = lut[c as usize];
+                            }
+                        }
                     }
-                }}
+                }
             }
             save_png(&args[5], w, h, &frame);
         }
@@ -263,12 +367,224 @@ pub fn run_tool(args: &[String]) -> bool {
             let res = Resources::load(&args[2]).expect("load");
             for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
                 let m = Map::parse(&res.blood.read(e).unwrap()).unwrap();
-                let links = m.sprites.iter().filter(|s| matches!(s.lotag, 6 | 7 | 9..=14)).count();
+                let mut lt = [0usize; 15];
+                for s in &m.sprites {
+                    if matches!(s.lotag, 6 | 7 | 9..=14) {
+                        lt[s.lotag as usize] += 1;
+                    }
+                }
+                let links = format!(
+                    "6:{} 7:{} 9:{} 10:{} 11:{} 12:{} 13:{} 14:{}",
+                    lt[6], lt[7], lt[9], lt[10], lt[11], lt[12], lt[13], lt[14]
+                );
                 let paths = m.sectors.iter().filter(|s| s.lotag == 612).count();
                 let pm = m.sprites.iter().filter(|s| s.lotag == 15).count();
-                let vox = m.sprites.iter().filter(|s| { let v = res.tiles.get(s.picnum as i32).anm.view; v == 6 || v == 7 }).count();
-                let types: std::collections::BTreeSet<i16> = m.sectors.iter().map(|s| s.lotag).filter(|&t| t >= 600).collect();
-                println!("{:10} links={:3} path_sectors={:2} path_markers={:3} voxel_sprites={:3} sector_types={:?}", e.file_name(), links, paths, pm, vox, types);
+                let vox = m
+                    .sprites
+                    .iter()
+                    .filter(|s| {
+                        let v = res.tiles.get(s.picnum as i32).anm.view;
+                        v == 6 || v == 7
+                    })
+                    .count();
+                let types: std::collections::BTreeSet<i16> =
+                    m.sectors.iter().map(|s| s.lotag).filter(|&t| t >= 600).collect();
+                println!(
+                    "{:10} links={:3} path_sectors={:2} path_markers={:3} voxel_sprites={:3} sector_types={:?}",
+                    e.file_name(),
+                    links,
+                    paths,
+                    pm,
+                    vox,
+                    types
+                );
+            }
+        }
+        Some("vox-visible") => {
+            // Voxel sprites in view from each map's single-player start.
+            let res = Resources::load(&args[2]).expect("load");
+            for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else {
+                    continue;
+                };
+                let p = &g.player;
+                let (ex, ey, ez) = (p.x, p.y, p.z - 0x2c00 as f64);
+                for (i, s) in g.world.sprites.iter().enumerate() {
+                    let v = res.tiles.get(s.picnum as i32).anm.view;
+                    if !(v == 6 || v == 7) || res.voxel_for_tile(s.picnum as i32).is_none() || s.statnum == 1024 {
+                        continue;
+                    }
+                    let (dx, dy) = (s.x as f64 - ex, s.y as f64 - ey);
+                    let d = dx.hypot(dy);
+                    if !(400.0..3000.0).contains(&d) {
+                        continue;
+                    }
+                    let ang = dy.atan2(dx).to_degrees() / 360.0 * 2048.0;
+                    let rel = (ang - p.ang + 1024.0).rem_euclid(2048.0) - 1024.0;
+                    if rel.abs() > 180.0 {
+                        continue;
+                    }
+                    let tz = s.z as f64 - 0x400 as f64;
+                    let h = ob_engine::collide::hitscan(
+                        &g.world.sectors,
+                        &g.world.walls,
+                        &[],
+                        ex,
+                        ey,
+                        ez,
+                        p.sector,
+                        dx / d,
+                        dy / d,
+                        (tz - ez) / d,
+                        d,
+                    );
+                    if h.dist >= d - 16.0 {
+                        println!(
+                            "{} sprite {i} type={} pic={} rep={}x{} dist={:.0} rel_ang={:.0} view={}",
+                            e.name, s.lotag, s.picnum, s.xrepeat, s.yrepeat, d, rel, v
+                        );
+                    }
+                }
+            }
+        }
+        Some("dude-visible") => {
+            // Dudes in clear view from each map's single-player start.
+            let res = Resources::load(&args[2]).expect("load");
+            for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let p = &g.player;
+                let (ex, ey, ez) = (p.x, p.y, p.z - 0x2c00 as f64);
+                for (i, s) in g.world.sprites.iter().enumerate() {
+                    if s.statnum == 1024 || !ob_game::dudes::is_dude(s.lotag) {
+                        continue;
+                    }
+                    let (dx, dy) = (s.x as f64 - ex, s.y as f64 - ey);
+                    let d = dx.hypot(dy);
+                    if !(300.0..12000.0).contains(&d) {
+                        continue;
+                    }
+                    let ang = dy.atan2(dx).to_degrees() / 360.0 * 2048.0;
+                    let rel = (ang - p.ang + 1024.0).rem_euclid(2048.0) - 1024.0;
+                    if rel.abs() > 340.0 {
+                        continue;
+                    }
+                    let tz = s.z as f64 - 0x1800 as f64;
+                    let h = ob_engine::collide::hitscan(&g.world.sectors, &g.world.walls, &[], ex, ey, ez, p.sector, dx / d, dy / d, (tz - ez) / d, d);
+                    if h.dist >= d - 16.0 {
+                        println!("{} sprite {i} type={} dist={:.0} rel_ang={:.0} ai={:?}", e.name, s.lotag, d, rel, g.ai_state(i));
+                    }
+                }
+            }
+        }
+        Some("vox-test") => {
+            // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).
+            let res = Resources::load(&args[2]).expect("load");
+            let pic: i32 = args[3].parse().unwrap();
+            let ang: f64 = args.get(5).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            let pts = [(-4096, -4096), (4096, -4096), (4096, 4096), (-4096, 4096)];
+            let walls: Vec<ob_engine::map::Wall> = pts
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y))| ob_engine::map::Wall {
+                    x,
+                    y,
+                    point2: ((i + 1) % 4) as i16,
+                    nextwall: -1,
+                    nextsector: -1,
+                    picnum: 253,
+                    xrepeat: 8,
+                    yrepeat: 8,
+                    shade: 10,
+                    ..Default::default()
+                })
+                .collect();
+            let mut sec = ob_engine::map::Sector {
+                wallptr: 0,
+                wallnum: 4,
+                ..Default::default()
+            };
+            sec.ceiling.z = -40000;
+            sec.floor.z = 0;
+            sec.floor.picnum = 270;
+            sec.ceiling.picnum = 253;
+            let sectors = vec![sec];
+            let base = SpriteDraw {
+                y: 0.0,
+                z: 0.0,
+                picnum: pic,
+                xrepeat: 48,
+                yrepeat: 48,
+                ang,
+                sector: 0,
+                ..Default::default()
+            };
+            let sprites = vec![
+                SpriteDraw {
+                    x: 0.0,
+                    y: -200.0,
+                    voxel: res.voxel_for_tile(pic),
+                    ..base
+                },
+                SpriteDraw {
+                    x: 0.0,
+                    y: 200.0,
+                    ..base
+                },
+            ];
+            let luts = res.build_luts(0);
+            let scene = Scene {
+                sectors: &sectors,
+                walls: &walls,
+                sprites: &sprites,
+                tiles: &res.tiles,
+                luts: &luts,
+                sky_offsets: &[0],
+                sky_bits: 0,
+                visibility: 0,
+                clock: 0,
+                voxels: &res.voxels,
+                ror: &[],
+            };
+            let cam = Camera {
+                x: -900.0,
+                y: 0.0,
+                z: -3000.0,
+                ang: 0.0,
+                horiz: -25.0,
+                sector: 0,
+            };
+            let mut r = Renderer::new(640, 400);
+            r.render(&scene, &cam);
+            save_png(&args[4], 640, 400, &r.frame);
+            println!(
+                "voxel {:?} tile {}x{}",
+                res.voxel_for_tile(pic)
+                    .and_then(|i| res.voxels[i as usize].as_ref().map(|v| (v.xs, v.ys, v.zs, v.pivot))),
+                res.tiles.get(pic).width,
+                res.tiles.get(pic).height
+            );
+        }
+        Some("find-vox") => {
+            let res = Resources::load(&args[2]).expect("load");
+            let map = Map::parse(&res.blood.read_name(&format!("{}.MAP", args[3])).unwrap()).unwrap();
+            for (i, s) in map.sprites.iter().enumerate() {
+                let v = res.tiles.get(s.picnum as i32).anm.view;
+                if (v == 6 || v == 7) && res.voxel_for_tile(s.picnum as i32).is_some() {
+                    println!(
+                        "{i}: type={} pic={} vox={:?} view={} pos=({},{},{}) rep={}x{} cstat={:#x} ang={}",
+                        s.lotag,
+                        s.picnum,
+                        res.voxel_for_tile(s.picnum as i32),
+                        v,
+                        s.x,
+                        s.y,
+                        s.z,
+                        s.xrepeat,
+                        s.yrepeat,
+                        s.cstat,
+                        s.ang
+                    );
+                }
             }
         }
         Some("tiles-scan") => {
@@ -286,7 +602,12 @@ pub fn run_tool(args: &[String]) -> bool {
             let t = res.tiles.get(args[3].parse().unwrap());
             let (w, h) = (t.width as usize, t.height as usize);
             let lut = luts.get(0);
-            let frame: Vec<u32> = (0..w * h).map(|i| { let (x, y) = (i % w, i / w); lut[t.pixels[x * h + y] as usize] }).collect();
+            let frame: Vec<u32> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    lut[t.pixels[x * h + y] as usize]
+                })
+                .collect();
             save_png(&args[4], w, h, &frame);
             println!("{}x{} anm {:?}", w, h, t.anm);
         }
@@ -338,7 +659,8 @@ pub fn run_tool(args: &[String]) -> bool {
             for (i, sp) in map.sprites.iter().enumerate() {
                 if (sp.x - x).abs() < r && (sp.y - y).abs() < r {
                     let t = res.tiles.get(sp.picnum as i32);
-                    println!("{i}: type={} stat={} pos=({},{},{}) pic={} {}x{} view={} frames={} cstat={:#x} rep={}x{} pal={} shade={} x={:?}",
+                    println!("{i}: sect={} [c={} f={}] type={} stat={} pos=({},{},{}) pic={} {}x{} view={} frames={} cstat={:#x} rep={}x{} pal={} shade={} x={:?}",
+                        sp.sectnum, map.sectors.get(sp.sectnum.max(0) as usize).map_or(0, |q| q.ceiling.z), map.sectors.get(sp.sectnum.max(0) as usize).map_or(0, |q| q.floor.z),
                         sp.lotag, sp.statnum, sp.x, sp.y, sp.z, sp.picnum, t.width, t.height, t.anm.view, t.anm.frames, sp.cstat, sp.xrepeat, sp.yrepeat, sp.pal, sp.shade,
                         map.xsprite(i).map(|x| (x.rx_id, x.tx_id, x.data1, x.data2, x.data3, x.state)));
                 }

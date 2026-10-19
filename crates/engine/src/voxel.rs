@@ -32,7 +32,9 @@ impl Voxel {
         if numbytes + 4 > b.len() {
             return None;
         }
-        let xoff: Vec<usize> = (0..=xs).map(|i| rd(base + i * 4).map(|v| v as usize)).collect::<Option<_>>()?;
+        let xoff: Vec<usize> = (0..=xs)
+            .map(|i| rd(base + i * 4).map(|v| v as usize))
+            .collect::<Option<_>>()?;
         let xyo = base + (xs + 1) * 4;
         let mut data = vec![EMPTY; xs * ys * zs];
         for x in 0..xs {
@@ -58,7 +60,13 @@ impl Voxel {
                 }
             }
         }
-        Some(Voxel { xs, ys, zs, pivot, data })
+        Some(Voxel {
+            xs,
+            ys,
+            zs,
+            pivot,
+            data,
+        })
     }
 
     #[inline]
@@ -116,7 +124,17 @@ impl Voxel {
             if c != EMPTY {
                 return Some((tc, c));
             }
-            let a = if tmax[0] < tmax[1] { if tmax[0] < tmax[2] { 0 } else { 2 } } else if tmax[1] < tmax[2] { 1 } else { 2 };
+            let a = if tmax[0] < tmax[1] {
+                if tmax[0] < tmax[2] {
+                    0
+                } else {
+                    2
+                }
+            } else if tmax[1] < tmax[2] {
+                1
+            } else {
+                2
+            };
             if tmax[a] > t1 {
                 return None;
             }
