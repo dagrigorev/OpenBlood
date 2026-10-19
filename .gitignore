@@ -1,3 +1,6 @@
 /target
 *.png
 *.wav
+
+!/screenshots/
+!/screenshots/*.png
