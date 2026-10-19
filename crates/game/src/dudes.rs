@@ -112,7 +112,7 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
                 64.0,
                 Hitscan {
                     damage: 4,
-                    pellets: 6,
+                    pellets: 7, // up to 28 per blast measured in DOSBox (E2M4 bar)
                     spread: 0.08,
                     range: 8000.0,
                 },
@@ -149,7 +149,7 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
                 64.0,
                 Hitscan {
                     damage: 4,
-                    pellets: 6,
+                    pellets: 7,
                     spread: 0.08,
                     range: 8000.0,
                 },
@@ -210,7 +210,9 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
             pain_sound: 1106,
             die_sound: 1107,
             attack_sound: 1101,
-            ..d(4352, 60, 500.0, 64.0, melee(12, 220.0))
+            // Speed, damage and swing rate measured against the original (E4M9 start).
+            cooldown: 1.8,
+            ..d(4352, 60, 1150.0, 64.0, melee(18, 220.0))
         },
         204 => DudeInfo {
             spot_sound: 1200,

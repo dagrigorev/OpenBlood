@@ -34,9 +34,15 @@ pub const HEIGHT_STAND: f64 = 0x3400 as f64;
 pub const HEIGHT_CROUCH: f64 = 0x1c00 as f64;
 pub const RADIUS: f64 = 64.0;
 pub const STEP: f64 = 0x1a00 as f64;
-/// z units / s^2
-pub const GRAVITY: f64 = 0x10000 as f64 * 1.0;
-pub const JUMP_VEL: f64 = 0x8000 as f64;
+/// z units / s^2. With [`JUMP_VEL`] a jump lasts 0.8 s and peaks 16000 units up, as measured
+/// in the original (DOSBox video, E1M1 coffin).
+pub const GRAVITY: f64 = 200_000.0;
+pub const JUMP_VEL: f64 = 80_000.0;
+/// Fall speed scaled to what it would be under the old 0x10000 gravity, so fall damage
+/// keeps depending on the same fall heights.
+pub fn legacy_fall_speed(v: f64) -> f64 {
+    v * (0x10000 as f64 / GRAVITY).sqrt()
+}
 /// Top speeds and responsiveness measured from the original (DOSBox video, E1M1 start).
 pub const WALK_SPEED: f64 = 4600.0;
 pub const RUN_SPEED: f64 = 5600.0;
@@ -126,7 +132,9 @@ impl Player {
         Mover {
             radius: RADIUS,
             height: self.height(),
-            step: if self.on_ground { STEP } else { STEP * 0.5 },
+            // Full step height in the air too, so a jump can mantle onto a ledge (climbing
+            // out of the E1M1 coffin works this way in the original).
+            step: STEP,
         }
     }
 

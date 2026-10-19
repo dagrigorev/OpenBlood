@@ -204,3 +204,199 @@ fn walking_acceleration_matches_original() {
     let ok = |got: f64, want: f64| (got - want).abs() / want < 0.2;
     assert!(ok(samples[0], 329.0) && ok(samples[1], 1027.0), "travel {samples:?}");
 }
+
+/// Reference: DOSBox recording of E4M9's start, player idle. Axe zombies land the first
+/// hit ~2.5 s in, deal 18 per hit on skill 2 (≈10 on skill 0) and kill the player by ~5.3 s.
+#[test]
+fn axe_zombie_ambush_matches_original() {
+    let Some(r) = res() else { return };
+    for (skill, per_hit) in [(2, 18), (0, 10)] {
+        let mut g = Game::load_level_skill(&r, "E4M9", skill).unwrap();
+        let idle = ob_game::player::Input::default();
+        let mut hits = Vec::new();
+        let mut hp = g.player.health;
+        for t in 0..60 * 12 {
+            g.update(&r, &idle, 1.0 / 60.0);
+            if g.player.health < hp {
+                hits.push((t as f64 / 60.0, hp - g.player.health));
+                hp = g.player.health;
+            }
+            if g.player.dead {
+                break;
+            }
+        }
+        eprintln!("skill {skill}: hits {hits:?}");
+        let (first, dmg) = hits[0];
+        assert!((2.0..3.0).contains(&first), "first hit at {first:.2}s");
+        assert!((dmg - per_hit).abs() <= 1, "hit damage {dmg}, want {per_hit}");
+        if skill == 2 {
+            let death = hits.last().unwrap().0;
+            assert!(g.player.dead && (4.3..6.5).contains(&death), "death at {death:.2}s");
+        }
+    }
+}
+
+/// Reference: same E4M9 start on skill 0 swinging the pitchfork non-stop. In the original
+/// the zombies flinch and bleed but none dies before the player does (~7 s).
+#[test]
+fn pitchfork_does_not_outlast_axe_zombies() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level_skill(&r, "E4M9", 0).unwrap();
+    let swing = ob_game::player::Input {
+        fire: true,
+        ..Default::default()
+    };
+    let zombies: Vec<usize> = (0..g.world.sprites.len())
+        .filter(|&i| g.world.sprites[i].lotag == 203)
+        .collect();
+    for _ in 0..60 * 10 {
+        g.update(&r, &swing, 1.0 / 60.0);
+        if g.player.dead {
+            break;
+        }
+    }
+    let dead = zombies
+        .iter()
+        .filter(|&&i| matches!(g.ai_state(i), Some(ob_game::game::Ai::Dead | ob_game::game::Ai::Dying)))
+        .count();
+    eprintln!("player dead {} zombies killed {dead}/{}", g.player.dead, zombies.len());
+    assert!(g.player.dead, "player should be overwhelmed");
+    assert!(dead <= 1, "pitchfork killed {dead} zombies");
+}
+
+/// Reference: in the original a single point-blank shotgun barrel gibs an axe zombie.
+#[test]
+fn point_blank_shotgun_gibs_axe_zombie() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level_skill(&r, "E4M9", 2).unwrap();
+    g.arsenal.give_weapon(3, 50);
+    g.arsenal.select(3);
+    let idle = ob_game::player::Input::default();
+    let fire = ob_game::player::Input {
+        fire: true,
+        ..Default::default()
+    };
+    // Wait for a zombie to come close, then turn to face it.
+    let close = |g: &Game| {
+        (0..g.world.sprites.len()).find(|&i| {
+            let s = &g.world.sprites[i];
+            s.lotag == 203
+                && g.ai_state(i).is_some_and(|a| !matches!(a, ob_game::game::Ai::Dead | ob_game::game::Ai::Dying))
+                && (s.x as f64 - g.player.x).hypot(s.y as f64 - g.player.y) < 600.0
+        })
+    };
+    let mut target = None;
+    for _ in 0..60 * 5 {
+        g.update(&r, &idle, 1.0 / 60.0);
+        if let Some(i) = close(&g) {
+            target = Some(i);
+            break;
+        }
+    }
+    let i = target.expect("a zombie should come close in front of the player");
+    let s = &g.world.sprites[i];
+    let a = (s.y as f64 - g.player.y).atan2(s.x as f64 - g.player.x);
+    g.player.ang = (a / std::f64::consts::PI * 1024.0).rem_euclid(2048.0);
+    g.update(&r, &fire, 1.0 / 60.0);
+    for _ in 0..30 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    assert!(
+        matches!(g.ai_state(i), Some(ob_game::game::Ai::Dead | ob_game::game::Ai::Dying)),
+        "zombie {i} survived a point-blank blast: {:?}",
+        g.ai_state(i)
+    );
+}
+
+/// Reference: the original tommy gun fires ~14.6 rounds/s with the trigger held.
+#[test]
+fn tommy_gun_fire_rate_matches_original() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level(&r, "E1M1").unwrap();
+    g.arsenal.give_weapon(4, 500);
+    g.arsenal.select(4);
+    let idle = ob_game::player::Input::default();
+    for _ in 0..60 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    let fire = ob_game::player::Input {
+        fire: true,
+        ..Default::default()
+    };
+    let before = g.arsenal.ammo[ob_game::weapons::ammo::BULLETS];
+    for _ in 0..60 * 4 {
+        g.update(&r, &fire, 1.0 / 60.0);
+    }
+    let rate = (before - g.arsenal.ammo[ob_game::weapons::ammo::BULLETS]) as f64 / 4.0;
+    eprintln!("tommy gun: {rate:.1} rounds/s");
+    assert!((12.5..16.5).contains(&rate), "fire rate {rate:.1}/s");
+}
+
+/// Reference: E4M9 start on skill 2 holding the tommy gun trigger for ~5 s brings down
+/// one axe zombie (not the whole group) while the player drops to ~10 health.
+#[test]
+fn tommy_gun_ambush_matches_original() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level_skill(&r, "E4M9", 2).unwrap();
+    g.arsenal.give_weapon(4, 500);
+    g.arsenal.select(4);
+    let idle = ob_game::player::Input::default();
+    let fire = ob_game::player::Input {
+        fire: true,
+        ..Default::default()
+    };
+    for _ in 0..60 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    for _ in 0..60 * 5 {
+        g.update(&r, &fire, 1.0 / 60.0);
+    }
+    let killed = (0..g.world.sprites.len())
+        .filter(|&i| g.world.sprites[i].lotag == 203)
+        .filter(|&i| matches!(g.ai_state(i), Some(ob_game::game::Ai::Dead | ob_game::game::Ai::Dying)))
+        .count();
+    eprintln!("tommy ambush: killed {killed}, health {}", g.player.health);
+    assert!((1..=2).contains(&killed), "killed {killed}");
+}
+
+/// Reference: E1M1 starts inside a coffin (sector 30). The first input fires level start,
+/// the coffin floor rises (busy time 4 s) and the player jumps out over the rim into the crypt.
+#[test]
+fn e1m1_player_can_climb_out_of_coffin() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level(&r, "E1M1").unwrap();
+    let idle = ob_game::player::Input::default();
+    let nudge = ob_game::player::Input {
+        turn: 1.0,
+        ..Default::default()
+    };
+    g.update(&r, &nudge, 1.0 / 60.0);
+    for _ in 0..60 * 5 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    assert_eq!(g.world.sectors[30].floor.z, -26624, "coffin floor should have risen");
+    g.player.ang = 1260.0;
+    let out = ob_game::player::Input {
+        forward: 1.0,
+        jump: true,
+        ..Default::default()
+    };
+    for t in 0..90 {
+        g.update(&r, &out, 1.0 / 60.0);
+        if t % 10 == 0 {
+            eprintln!("t{t} ({:.0},{:.0},{:.0}) sect {}", g.player.x, g.player.y, g.player.z, g.player.sector);
+        }
+    }
+    for _ in 0..60 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    let coffin = [28, 29, 30, 67, 68];
+    assert!(
+        !coffin.contains(&g.player.sector),
+        "still in the coffin: sector {} at ({:.0},{:.0},{:.0})",
+        g.player.sector,
+        g.player.x,
+        g.player.y,
+        g.player.z
+    );
+}

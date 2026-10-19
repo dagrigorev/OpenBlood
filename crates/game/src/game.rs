@@ -318,7 +318,7 @@ impl Game {
         self.player.update(&self.world, input, &obstacles, dt);
         self.room_transition();
         if !was_on_ground && self.player.on_ground {
-            let v = self.player.fall_speed_peak;
+            let v = crate::player::legacy_fall_speed(self.player.fall_speed_peak);
             self.player.fall_speed_peak = 0.0;
             if v > 0x18000 as f64 && self.powerups.feather_fall <= 0.0 {
                 let dmg = ((v - 0x18000 as f64) / 1024.0) as i32;
@@ -1063,7 +1063,9 @@ impl Game {
         if self.player.dead || amount <= 0 || self.powerups.invulnerable > 0.0 {
             return;
         }
-        let mut dmg = amount;
+        // Difficulty scales damage taken (measured in DOSBox: 18 on skill 2, ~10 on skill 0).
+        const SKILL_SCALE: [f64; 5] = [0.56, 0.78, 1.0, 1.25, 1.5];
+        let mut dmg = ((amount as f64 * SKILL_SCALE[self.skill.clamp(0, 4) as usize]).round() as i32).max(1);
         for a in self.player.armor.iter_mut() {
             if *a > 0 && dmg > 0 {
                 let absorbed = (dmg / 2).min(*a);
@@ -1615,6 +1617,9 @@ impl Game {
                 pellets,
                 spread,
             } => {
+                // Pellets hitting the same target add up into one hit, so a point-blank
+                // shotgun blast can gib like in the original.
+                let mut hits: Vec<(usize, i32)> = Vec::new();
                 for _ in 0..pellets {
                     let (mut ax, mut ay) = (dx + self.randf() * spread, dy + self.randf() * spread);
                     let l = ax.hypot(ay);
@@ -1635,7 +1640,10 @@ impl Game {
                         30000.0,
                     );
                     match h.target {
-                        TraceTarget::Sprite(j) => self.damage_sprite(res, j, damage * mult, false),
+                        TraceTarget::Sprite(j) => match hits.iter_mut().find(|h| h.0 == j) {
+                            Some(h) => h.1 += damage * mult,
+                            None => hits.push((j, damage * mult)),
+                        },
                         TraceTarget::Wall(w) => {
                             let fx = 44 + self.rand() % 3;
                             self.spawn_fx(fx, h.x - ax * 4.0, h.y - ay * 4.0, h.z, h.sector);
@@ -1650,6 +1658,9 @@ impl Game {
                         }
                         TraceTarget::Nothing => {}
                     }
+                }
+                for (j, amount) in hits {
+                    self.damage_sprite(res, j, amount, false);
                 }
                 self.alert_nearby(res, 6000.0);
             }
@@ -1867,8 +1878,9 @@ impl Game {
             y: self.player.y,
             z: self.player.view_z(),
             ang: self.player.ang,
-            // Blood's view centre sits 10 lines above the screen centre.
-            horiz: self.player.horiz + 10.0,
+            // Blood's view centre sits 10 lines above the screen centre. The renderer's
+            // horiz grows downward while the player's grows upward (look up = positive).
+            horiz: 10.0 - self.player.horiz,
             sector: ob_engine::geom::update_sector(
                 &self.world.sectors,
                 &self.world.walls,

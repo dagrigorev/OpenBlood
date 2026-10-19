@@ -156,6 +156,10 @@ pub struct Triggers {
     /// Vertex groups: walls sharing a position (for moving shared vertices together).
     #[serde(skip)]
     vertex_group: Vec<Vec<usize>>,
+    /// Slide sectors whose walls stay put: moving them would fold a sector over itself
+    /// (E1M1's coffin), which the original never shows.
+    #[serde(skip)]
+    frozen_slides: std::collections::HashSet<usize>,
     pub notices: Vec<Notice>,
     /// Sector movements since the game last consumed them (to carry the player).
     pub carries: Vec<Carry>,
@@ -197,6 +201,7 @@ impl Triggers {
             busy: Vec::new(),
             rx_index: HashMap::new(),
             vertex_group: Vec::new(),
+            frozen_slides: Default::default(),
             notices: Vec::new(),
             carries: Vec::new(),
             xforms: HashMap::new(),
@@ -216,6 +221,71 @@ impl Triggers {
             by_pos.entry((x, y)).or_default().push(i);
         }
         self.vertex_group = world.base_wall_xy.iter().map(|p| by_pos[p].clone()).collect();
+        self.frozen_slides = self.find_folding_slides(world);
+    }
+
+    /// Slide sectors left in place because moving them would fold geometry.
+    pub fn frozen_slides(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = self.frozen_slides.iter().copied().collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Slide sectors whose full travel would make some sector polygon self-intersecting.
+    fn find_folding_slides(&self, world: &World) -> std::collections::HashSet<usize> {
+        let mut wall_sector = vec![usize::MAX; world.walls.len()];
+        for s in 0..world.sectors.len() {
+            for w in world.sector_walls(s) {
+                if w < wall_sector.len() {
+                    wall_sector[w] = s;
+                }
+            }
+        }
+        let mut out = std::collections::HashSet::new();
+        for s in 0..world.sectors.len() {
+            // Only marked slides move single vertices; whole-sector slides (trains) are fine.
+            let t = world.sectors[s].lotag;
+            if t != sector_type::SLIDE_MARKED {
+                continue;
+            }
+            let Some(x) = world.xsector(s) else { continue };
+            let (m0, m1) = (x.marker0 as usize, x.marker1 as usize);
+            if m0 >= world.sprites.len() || m1 >= world.sprites.len() {
+                continue;
+            }
+            // Split doors (forward + reverse panels) always move.
+            if world.sector_walls(s).any(|w| world.walls[w].cstat & WALL_MOVE_REVERSE != 0) {
+                continue;
+            }
+            let (ax, ay, _) = world.base_sprite_xy[m0];
+            let (bx, by, _) = world.base_sprite_xy[m1];
+            let init = x.state as i32;
+            for f in [1 - init, -init] {
+                if f == 0 {
+                    continue;
+                }
+                let (dx, dy) = ((bx - ax) * f, (by - ay) * f);
+                let mut pos: Vec<(i32, i32)> = world.base_wall_xy.clone();
+                let mut touched = std::collections::BTreeSet::new();
+                for (w, sign) in Self::moved_walls(world, s, t == sector_type::SLIDE_MARKED) {
+                    let (px, py) = world.base_wall_xy[w];
+                    for &g in &self.vertex_group[w] {
+                        pos[g] = (px + dx * sign, py + dy * sign);
+                        touched.insert(wall_sector[g]);
+                    }
+                }
+                // Folding a neighbouring sector (not the slide itself) means the walls
+                // would be dragged out into solid space.
+                let beside: std::collections::BTreeSet<usize> = Self::moved_walls(world, s, true)
+                    .iter()
+                    .filter_map(|&(w, _)| usize::try_from(world.walls[w].nextsector).ok())
+                    .collect();
+                if touched.iter().any(|&ts| beside.contains(&ts) && sector_folds(world, ts, &pos)) {
+                    out.insert(s);
+                }
+            }
+        }
+        out
     }
 
     pub fn reindex(&mut self, world: &World) {
@@ -723,6 +793,9 @@ impl Triggers {
     }
 
     fn translate_sector(&mut self, world: &mut World, s: usize, dx: i32, dy: i32, marked: bool) {
+        if self.frozen_slides.contains(&s) {
+            return;
+        }
         for (w, sign) in Self::moved_walls(world, s, marked) {
             let (bx, by) = world.base_wall_xy[w];
             for &g in &self.vertex_group[w] {
@@ -923,4 +996,34 @@ mod tests {
             assert!((wave(1.0, k) - 1.0).abs() < 1e-9);
         }
     }
+}
+
+/// True when two non-adjacent edges of sector `s` cross, using wall positions `pos`.
+fn sector_folds(world: &World, s: usize, pos: &[(i32, i32)]) -> bool {
+    let edges: Vec<((f64, f64), (f64, f64))> = world
+        .sector_walls(s)
+        .map(|w| {
+            let a = pos[w];
+            let b = pos[world.walls[w].point2 as usize];
+            ((a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64))
+        })
+        .collect();
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    for i in 0..edges.len() {
+        for j in i + 1..edges.len() {
+            let (p1, p2) = edges[i];
+            let (q1, q2) = edges[j];
+            if p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2 {
+                continue;
+            }
+            let d1 = cross(q1, q2, p1);
+            let d2 = cross(q1, q2, p2);
+            let d3 = cross(p1, p2, q1);
+            let d4 = cross(p1, p2, q2);
+            if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+                return true;
+            }
+        }
+    }
+    false
 }

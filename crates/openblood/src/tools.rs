@@ -476,6 +476,130 @@ pub fn run_tool(args: &[String]) -> bool {
                 }
             }
         }
+        Some("dude-near") => {
+            // Dudes of the given types within RADIUS of each map's start (no sight check).
+            // openblood dude-near DATA RADIUS TYPE...
+            let res = Resources::load(&args[2]).expect("load");
+            let radius: f64 = args[3].parse().expect("radius");
+            let types: Vec<i16> = args[4..].iter().map(|t| t.parse().expect("type")).collect();
+            for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let p = &g.player;
+                for (i, s) in g.world.sprites.iter().enumerate() {
+                    if s.statnum == 1024 || !types.contains(&s.lotag) {
+                        continue;
+                    }
+                    let (dx, dy) = (s.x as f64 - p.x, s.y as f64 - p.y);
+                    let d = dx.hypot(dy);
+                    if d < radius {
+                        let ang = dy.atan2(dx).to_degrees() / 360.0 * 2048.0;
+                        let rel = (ang - p.ang + 1024.0).rem_euclid(2048.0) - 1024.0;
+                        let x = g.world.xsprite(i);
+                        println!(
+                            "{} sprite {i} type={} dist={d:.0} rel_ang={rel:.0} dz={} ambush={} deaf={}",
+                            e.name,
+                            s.lotag,
+                            s.z - p.z as i32,
+                            x.is_some_and(|x| x.dude_ambush),
+                            x.is_some_and(|x| x.dude_deaf)
+                        );
+                    }
+                }
+            }
+        }
+        Some("noise-test") => {
+            // Fires the tommy gun for 1 s at each map's start, then idles 12 s and reports
+            // when the player gets hurt. openblood noise-test DATA MAP...
+            let res = Resources::load(&args[2]).expect("load");
+            for name in &args[3..] {
+                let mut g = ob_game::game::Game::load_level(&res, name).expect("map");
+                g.arsenal.give_weapon(4, 500);
+                g.arsenal.select(4);
+                let fire = ob_game::player::Input { fire: true, ..Default::default() };
+                let idle = ob_game::player::Input::default();
+                let mut hp = g.player.health;
+                let mut hits = Vec::new();
+                for t in 0..60 * 13 {
+                    g.update(&res, if (30..90).contains(&t) { &fire } else { &idle }, 1.0 / 60.0);
+                    if g.player.health < hp {
+                        hits.push(format!("{:.1}s:{}", t as f64 / 60.0, hp - g.player.health));
+                        hp = g.player.health;
+                    }
+                }
+                println!("{name}: {}", hits.join(" "));
+            }
+        }
+        Some("topdown") => {
+            // openblood topdown DATA MAP OUT.png CX CY HALF : walls around (CX,CY) within HALF
+            // units (red = solid, grey = open), player start (green, with facing), dudes
+            // (yellow = cultists, orange = others). Grid lines every 1024 units.
+            let res = Resources::load(&args[2]).expect("load");
+            let g = ob_game::game::Game::load_level(&res, &args[3]).expect("map");
+            let (cx, cy, half): (f64, f64, f64) = (args[5].parse().unwrap(), args[6].parse().unwrap(), args[7].parse().unwrap());
+            let n = 1024usize;
+            let mut img = vec![0x101010u32; n * n];
+            let to = |x: f64, y: f64| (((x - cx) / half * 0.5 + 0.5) * n as f64, ((y - cy) / half * 0.5 + 0.5) * n as f64);
+            let mut put = |img: &mut Vec<u32>, x: f64, y: f64, c: u32| {
+                if x >= 0.0 && y >= 0.0 && (x as usize) < n && (y as usize) < n {
+                    img[y as usize * n + x as usize] = c;
+                }
+            };
+            let line = |img: &mut Vec<u32>, put: &mut dyn FnMut(&mut Vec<u32>, f64, f64, u32), a: (f64, f64), b: (f64, f64), c: u32| {
+                let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).max(1);
+                for k in 0..=steps {
+                    let t = k as f64 / steps as f64;
+                    put(img, a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, c);
+                }
+            };
+            let grid = ((cx - half) / 1024.0).floor() as i64;
+            for k in 0..((2.0 * half / 1024.0) as i64 + 2) {
+                let v = (grid + k) as f64 * 1024.0;
+                line(&mut img, &mut put, to(v, cy - half), to(v, cy + half), 0x202838);
+                let h = (((cy - half) / 1024.0).floor() as i64 + k) as f64 * 1024.0;
+                line(&mut img, &mut put, to(cx - half, h), to(cx + half, h), 0x202838);
+            }
+            for w in g.world.walls.iter() {
+                let p2 = &g.world.walls[w.point2 as usize];
+                let c = if w.nextsector >= 0 { 0x505050 } else { 0xd04040 };
+                line(&mut img, &mut put, to(w.x as f64, w.y as f64), to(p2.x as f64, p2.y as f64), c);
+            }
+            for (i, s) in g.world.sprites.iter().enumerate() {
+                if s.statnum == 1024 || !ob_game::dudes::is_dude(s.lotag) {
+                    continue;
+                }
+                let c = if matches!(s.lotag, 201 | 202) { 0xffff00 } else { 0xff8000 };
+                let (x, y) = to(s.x as f64, s.y as f64);
+                for dy in -3..=3 {
+                    for dx in -3..=3 {
+                        put(&mut img, x + dx as f64, y + dy as f64, c);
+                    }
+                }
+                println!("dude {i} type {} at ({}, {}) z {}", s.lotag, s.x, s.y, s.z);
+            }
+            let p = &g.player;
+            let a = p.ang / 1024.0 * std::f64::consts::PI;
+            let (x, y) = to(p.x, p.y);
+            line(&mut img, &mut put, (x, y), (x + a.cos() * 20.0, y + a.sin() * 20.0), 0x40ff40);
+            for dy in -4..=4 {
+                for dx in -4..=4 {
+                    put(&mut img, x + dx as f64, y + dy as f64, 0x40ff40);
+                }
+            }
+            println!("player at ({:.0}, {:.0}) ang {:.0}", p.x, p.y, p.ang);
+            save_png(&args[4], n, n, &img);
+        }
+        Some("frozen-slides") => {
+            // Slide sectors whose walls are kept still because moving them folds geometry.
+            let res = Resources::load(&args[2]).expect("load");
+            for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let total = g.world.sectors.iter().filter(|s| matches!(s.lotag, 614 | 616)).count();
+                let f = g.triggers.frozen_slides();
+                if !f.is_empty() {
+                    println!("{}: frozen {:?} of {total} slide sectors", e.name, f);
+                }
+            }
+        }
         Some("vox-test") => {
             // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).
             let res = Resources::load(&args[2]).expect("load");

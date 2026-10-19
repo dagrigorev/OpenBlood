@@ -181,6 +181,9 @@ impl Game {
                     continue; // don't walk off cliffs
                 }
             }
+            if self.crowded(i, info, x, y, nx, ny) {
+                continue;
+            }
             let s = &mut self.world.sprites[i];
             s.x = nx.round() as i32;
             s.y = ny.round() as i32;
@@ -191,6 +194,27 @@ impl Game {
             return true;
         }
         false
+    }
+
+    /// True when moving dude `i` from (x, y) to (nx, ny) pushes it further into another
+    /// live dude or the player (dudes don't walk through each other).
+    fn crowded(&self, i: usize, info: &DudeInfo, x: f64, y: f64, nx: f64, ny: f64) -> bool {
+        let into = |ox: f64, oy: f64, r: f64| {
+            let d1 = (nx - ox).hypot(ny - oy);
+            d1 < r && d1 < (x - ox).hypot(y - oy)
+        };
+        if !self.player.dead && into(self.player.x, self.player.y, info.radius + crate::player::RADIUS) {
+            return true;
+        }
+        let z = self.world.sprites[i].z;
+        self.world.sprites.iter().enumerate().any(|(j, o)| {
+            j != i
+                && o.statnum != stat::FREE
+                && is_dude(o.lotag)
+                && !matches!(self.ai[j], Ai::Dead | Ai::Dying)
+                && (o.z - z).abs() < 0x3000
+                && dude_info(o.lotag).is_some_and(|oi| into(o.x as f64, o.y as f64, info.radius + oi.radius))
+        })
     }
 
     /// Running away from the player (innocents, burning dudes).
