@@ -11,7 +11,8 @@ const SOUND_SECTOR: i16 = 709;
 const SOUND_AMBIENT: i16 = 710;
 
 pub struct Sound {
-    pub samples: Vec<f32>,
+    /// Unsigned 8-bit PCM as stored in SOUNDS.RFF (converted while mixing).
+    pub samples: Vec<u8>,
     pub rate: u32,
     pub loop_start: Option<usize>,
     pub volume: f32,
@@ -58,10 +59,17 @@ struct Mixer {
     channels: Vec<Channel>,
     out_rate: f64,
     master: f32,
-    /// Interleaved stereo 44.1 kHz music and its play position (in frames).
-    music: Option<Arc<Vec<f32>>>,
-    music_pos: f64,
+    /// Streamed interleaved stereo 44.1 kHz music.
+    music: Option<MusicStream>,
     music_vol: f32,
+}
+
+/// Music arriving in chunks from a reader thread ([`crate::cdaudio::stream_wav`]).
+struct MusicStream {
+    rx: std::sync::mpsc::Receiver<Vec<i16>>,
+    cur: Vec<i16>,
+    /// Play position in frames within `cur`.
+    pos: f64,
 }
 
 impl Mixer {
@@ -82,7 +90,7 @@ impl Mixer {
                     }
                 }
                 let i = ch.pos as usize;
-                let v = data[i.min(data.len() - 1)];
+                let v = (data[i.min(data.len() - 1)] as f32 - 128.0) * (1.0 / 128.0);
                 if nch >= 2 {
                     out[f * nch] += v * ch.vol_l;
                     out[f * nch + 1] += v * ch.vol_r;
@@ -97,22 +105,30 @@ impl Mixer {
         for s in out.iter_mut() {
             *s *= self.master;
         }
-        if let Some(m) = &self.music {
-            let nframes = m.len() / 2;
-            if nframes > 0 {
-                let step = 44100.0 / self.out_rate;
-                for f in 0..frames {
-                    let i = (self.music_pos as usize % nframes) * 2;
-                    let (l, r) = (m[i] * self.music_vol, m[i + 1] * self.music_vol);
-                    if nch >= 2 {
-                        out[f * nch] += l;
-                        out[f * nch + 1] += r;
-                    } else {
-                        out[f] += (l + r) * 0.5;
+        if let Some(ms) = &mut self.music {
+            let step = 44100.0 / self.out_rate;
+            let vol = self.music_vol / 32768.0;
+            'frames: for f in 0..frames {
+                let mut i = ms.pos as usize;
+                while i * 2 + 1 >= ms.cur.len() {
+                    match ms.rx.try_recv() {
+                        Ok(next) => {
+                            ms.pos = (ms.pos - (ms.cur.len() / 2) as f64).max(0.0);
+                            ms.cur = next;
+                            i = ms.pos as usize;
+                        }
+                        // Not read yet (or stopped): silence until the next chunk arrives.
+                        Err(_) => break 'frames,
                     }
-                    self.music_pos += step;
                 }
-                self.music_pos %= nframes as f64;
+                let (l, r) = (ms.cur[i * 2] as f32 * vol, ms.cur[i * 2 + 1] as f32 * vol);
+                if nch >= 2 {
+                    out[f * nch] += l;
+                    out[f * nch + 1] += r;
+                } else {
+                    out[f] += (l + r) * 0.5;
+                }
+                ms.pos += step;
             }
         }
         for s in out.iter_mut() {
@@ -131,7 +147,7 @@ pub struct Audio {
 }
 
 impl Audio {
-    pub fn new(_res: &Resources) -> Result<Audio, String> {
+    pub fn new(res: &Resources) -> Result<Audio, String> {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or("no audio device")?;
         let supported = device.default_output_config().map_err(|e| e.to_string())?;
@@ -171,19 +187,38 @@ impl Audio {
         }
         .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
-        Ok(Audio {
+        let mut audio = Audio {
             _stream: stream,
             mixer,
             cache: HashMap::new(),
             map_name: String::new(),
             rng: 12345,
             track: 0,
-        })
+        };
+        audio.preload_all(res);
+        Ok(audio)
     }
 
     fn rand(&mut self) -> u32 {
         self.rng = self.rng.wrapping_mul(1103515245).wrapping_add(12345);
         self.rng >> 16
+    }
+
+    /// Decodes every sound effect once, up front (about the size of SOUNDS.RFF in memory),
+    /// so starting a level or firing a weapon never waits for a sound to load.
+    fn preload_all(&mut self, res: &Resources) {
+        let t = std::time::Instant::now();
+        let ids: Vec<u32> = res
+            .sounds
+            .as_ref()
+            .map(|r| r.entries.iter().filter(|e| e.ext == "SFX").map(|e| e.id).collect())
+            .unwrap_or_default();
+        for id in &ids {
+            self.load(res, *id as i32);
+        }
+        if std::env::var_os("OB_PROFILE").is_some() {
+            eprintln!("preloaded {} sounds in {:.1} ms", ids.len(), t.elapsed().as_secs_f64() * 1e3);
+        }
     }
 
     pub fn load(&mut self, res: &Resources, id: i32) -> Option<Arc<Sound>> {
@@ -196,7 +231,7 @@ impl Audio {
             let (vol, pitch, _range, format, loop_start, raw) = parse_sfx(&sfx)?;
             let pcm = rff.read_name(&format!("{raw}.RAW"))?;
             Some(Arc::new(Sound {
-                samples: pcm.iter().map(|&b| (b as f32 - 128.0) / 128.0).collect(),
+                samples: pcm,
                 rate: sfx_rate(format),
                 loop_start: (loop_start >= 0).then_some(loop_start as usize),
                 volume: (vol as f32 / 80.0).clamp(0.0, 2.0),
@@ -338,7 +373,6 @@ impl Audio {
     }
 
     /// Plays CD track `n` from `music/TRACKnn.WAV` (ripped from the user's own disc).
-    /// Loading happens on a background thread so level starts don't stall.
     pub fn play_track(&mut self, res: &Resources, n: u32) {
         if n == self.track {
             return;
@@ -353,13 +387,10 @@ impl Audio {
             res.dir.join("music").join(format!("TRACK{n:02}.WAV")),
             res.dir.join(format!("TRACK{n:02}.WAV")),
         ];
-        std::thread::spawn(move || {
-            if let Some(samples) = candidates.iter().find_map(|p| crate::cdaudio::load_wav(p)) {
-                let mut m = mixer.lock().unwrap();
-                m.music = Some(Arc::new(samples));
-                m.music_pos = 0.0;
-            }
-        });
+        // Streamed from disk: no big allocation or conversion when a level starts.
+        if let Some(rx) = candidates.iter().find_map(|p| crate::cdaudio::stream_wav(p)) {
+            mixer.lock().unwrap().music = Some(MusicStream { rx, cur: Vec::new(), pos: 0.0 });
+        }
     }
 }
 

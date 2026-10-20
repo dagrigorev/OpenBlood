@@ -67,6 +67,101 @@ pub fn resample(
     });
 }
 
+/// Like [`resample`], but the source is column-major (`src[x * sh + y]`, the renderer's
+/// native layout), so the frame never has to be transposed. Works on bands of output rows
+/// so every source column is read as short contiguous runs.
+#[allow(clippy::too_many_arguments)]
+pub fn resample_cols(
+    src: &[u32],
+    sw: usize,
+    sh: usize,
+    dst: &mut [u32],
+    stride: usize,
+    ox: usize,
+    oy: usize,
+    dw: usize,
+    dh: usize,
+    mode: Upscale,
+) {
+    if sw == 0 || sh == 0 || dw == 0 || dh == 0 {
+        return;
+    }
+    const BAND: usize = 16;
+    let (fx, fy) = (sw as f64 / dw as f64, sh as f64 / dh as f64);
+    let shrink = fx > 1.0 && fy > 1.0;
+    let foot = |d: usize, f: f64, n: usize| {
+        let a = ((d as f64 * f) as usize).min(n - 1);
+        let b = (((d + 1) as f64 * f).ceil() as usize).clamp(a + 1, n);
+        (a, b)
+    };
+    let mode = if sw == dw && sh == dh { Upscale::Nearest } else { mode };
+    let xs: Vec<Tap> = (0..dw).map(|x| Tap::new(x, fx, sw, mode)).collect();
+    let ys: Vec<Tap> = (0..dh).map(|y| Tap::new(y, fy, sh, mode)).collect();
+    let xf: Vec<(usize, usize)> = (0..dw).map(|x| foot(x, fx, sw)).collect();
+    let yf: Vec<(usize, usize)> = (0..dh).map(|y| foot(y, fy, sh)).collect();
+    let area = &mut dst[oy * stride..(oy + dh) * stride];
+    // Exactly half size (4x supersampling at native resolution): average 2x2 blocks with
+    // packed channel sums instead of the general footprint loop.
+    if sw == dw * 2 && sh == dh * 2 {
+        area.par_chunks_mut(stride * BAND).enumerate().for_each(|(band, rows)| {
+            let r0 = band * BAND;
+            let n = rows.len() / stride;
+            for x in 0..dw {
+                let c0 = &src[2 * x * sh..2 * x * sh + sh];
+                let c1 = &src[(2 * x + 1) * sh..(2 * x + 1) * sh + sh];
+                for k in 0..n {
+                    let y = 2 * (r0 + k);
+                    let (a, b, c, d) = (c0[y], c0[y + 1], c1[y], c1[y + 1]);
+                    let rb = (a & 0xff00ff) + (b & 0xff00ff) + (c & 0xff00ff) + (d & 0xff00ff);
+                    let g = (a & 0xff00) + (b & 0xff00) + (c & 0xff00) + (d & 0xff00);
+                    rows[k * stride + ox + x] = ((rb >> 2) & 0xff00ff) | ((g >> 2) & 0xff00);
+                }
+            }
+        });
+        return;
+    }
+    area.par_chunks_mut(stride * BAND).enumerate().for_each(|(band, rows)| {
+        let r0 = band * BAND;
+        let n = rows.len() / stride;
+        if shrink {
+            let mut acc = [(0u32, 0u32, 0u32, 0u32); BAND];
+            for (x, &(x0, x1)) in xf.iter().enumerate() {
+                acc[..n].fill((0, 0, 0, 0));
+                for c in x0..x1 {
+                    let column = &src[c * sh..c * sh + sh];
+                    for (k, a) in acc[..n].iter_mut().enumerate() {
+                        let (y0, y1) = yf[r0 + k];
+                        for &p in &column[y0..y1] {
+                            a.0 += (p >> 16) & 255;
+                            a.1 += (p >> 8) & 255;
+                            a.2 += p & 255;
+                            a.3 += 1;
+                        }
+                    }
+                }
+                for (k, a) in acc[..n].iter().enumerate() {
+                    rows[k * stride + ox + x] = ((a.0 / a.3) << 16) | ((a.1 / a.3) << 8) | (a.2 / a.3);
+                }
+            }
+            return;
+        }
+        for (x, tx) in xs.iter().enumerate() {
+            let c0 = &src[tx.i0 * sh..tx.i0 * sh + sh];
+            let c1 = &src[tx.i1 * sh..tx.i1 * sh + sh];
+            for k in 0..n {
+                let ty = &ys[r0 + k];
+                rows[k * stride + ox + x] = if mode == Upscale::Nearest {
+                    c0[ty.i0]
+                } else {
+                    let a = mix(c0[ty.i0], c1[ty.i0], tx.w);
+                    let b = mix(c0[ty.i1], c1[ty.i1], tx.w);
+                    mix(a, b, ty.w)
+                };
+            }
+        }
+    });
+}
+
 /// Two neighbouring source samples and the blend weight between them.
 struct Tap {
     i0: usize,
@@ -139,6 +234,51 @@ mod tests {
         let mut smooth = [0u32; 8];
         resample(&src, 2, 1, &mut smooth, 8, 0, 0, 8, 1, Upscale::Smooth);
         assert_ne!(smooth[2], 0, "bilinear blends further from the seam");
+    }
+
+    #[test]
+    fn column_major_matches_row_major() {
+        let (sw, sh) = (37, 23);
+        let rows: Vec<u32> = (0..sw * sh).map(|i| (i as u32 * 2654435761) & 0xffffff).collect();
+        let mut cols = vec![0u32; sw * sh];
+        for y in 0..sh {
+            for x in 0..sw {
+                cols[x * sh + y] = rows[y * sw + x];
+            }
+        }
+        for (dw, dh) in [(37, 23), (80, 50), (15, 9)] {
+            // (the exact-half fast path is checked separately below)
+            for m in Upscale::ALL {
+                let mut a = vec![0u32; dw * dh];
+                let mut b = vec![0u32; dw * dh];
+                resample(&rows, sw, sh, &mut a, dw, 0, 0, dw, dh, m);
+                resample_cols(&cols, sw, sh, &mut b, dw, 0, 0, dw, dh, m);
+                assert_eq!(a, b, "{dw}x{dh} {m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn half_size_fast_path_matches_box_average() {
+        let (sw, sh) = (40, 24);
+        let rows: Vec<u32> = (0..sw * sh).map(|i| (i as u32 * 2654435761) & 0xffffff).collect();
+        let mut cols = vec![0u32; sw * sh];
+        for y in 0..sh {
+            for x in 0..sw {
+                cols[x * sh + y] = rows[y * sw + x];
+            }
+        }
+        let (dw, dh) = (20, 12);
+        let mut fast = vec![0u32; dw * dh];
+        resample_cols(&cols, sw, sh, &mut fast, dw, 0, 0, dw, dh, Upscale::Sharp);
+        for y in 0..dh {
+            for x in 0..dw {
+                let px = [rows[2 * y * sw + 2 * x], rows[2 * y * sw + 2 * x + 1], rows[(2 * y + 1) * sw + 2 * x], rows[(2 * y + 1) * sw + 2 * x + 1]];
+                let avg = |sh: u32| px.iter().map(|p| (p >> sh) & 255).sum::<u32>() / 4;
+                let want = (avg(16) << 16) | (avg(8) << 8) | avg(0);
+                assert_eq!(fast[y * dw + x], want, "at {x},{y}");
+            }
+        }
     }
 
     #[test]

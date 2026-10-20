@@ -665,6 +665,64 @@ pub fn run_tool(args: &[String]) -> bool {
             save_png(out.join("aa_off.png").to_str().unwrap(), 480, 270, &low);
             save_png(out.join("aa_4x.png").to_str().unwrap(), 480, 270, &aa);
         }
+        Some("perf") => {
+            // openblood perf DATA MAP [W H] : level load time, then per-second simulation and
+            // render cost for the first seconds (player idle).
+            let res = Resources::load(&args[2]).expect("load");
+            let (w, h): (usize, usize) = (
+                args.get(4).and_then(|v| v.parse().ok()).unwrap_or(1920),
+                args.get(5).and_then(|v| v.parse().ok()).unwrap_or(1080),
+            );
+            let t0 = std::time::Instant::now();
+            let mut g = ob_game::game::Game::load_level(&res, &args[3]).expect("level");
+            println!("load {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+            let luts = res.build_luts(0);
+            let mut r = Renderer::new(w, h);
+            let idle = ob_game::player::Input::default();
+            let secs: usize = std::env::var("OB_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+            for sec in 0..secs {
+                let (mut sim, mut draw, mut worst) = (0.0f64, 0.0f64, 0.0f64);
+                let mut phases = [0.0f64; 4];
+                for _ in 0..60 {
+                    let a = std::time::Instant::now();
+                    g.update(&res, &idle, 1.0 / 60.0);
+                    let b = std::time::Instant::now();
+                    let cam = g.camera();
+                    let sprites = g.sprite_draws(&res, &cam);
+                    let scene = Scene {
+                        sectors: &g.world.sectors,
+                        walls: &g.world.walls,
+                        sprites: &sprites,
+                        tiles: &res.tiles,
+                        luts: &luts,
+                        sky_offsets: &g.world.sky_offsets,
+                        sky_bits: g.world.sky_bits,
+                        visibility: g.world.visibility,
+                        clock: g.clock,
+                        voxels: &res.voxels,
+                        ror: &g.world.ror_view,
+                    };
+                    r.render(&scene, &cam);
+                    let c = std::time::Instant::now();
+                    for (p, v) in phases.iter_mut().zip(r.phase_ms) {
+                        *p += v / 60.0;
+                    }
+                    sim += (b - a).as_secs_f64();
+                    draw += (c - b).as_secs_f64();
+                    worst = worst.max((c - a).as_secs_f64());
+                }
+                println!(
+                    "second {sec}: sim {:.2} ms/frame, render {:.2} ms/frame, worst frame {:.1} ms",
+                    sim / 60.0 * 1e3,
+                    draw / 60.0 * 1e3,
+                    worst * 1e3
+                );
+                println!(
+                    "    walls {:.2}  sprites-prep {:.2}  masked+sprites {:.2}  copy {:.2} ms  | sprites face/wall/floor/voxel {:?}",
+                    phases[0], phases[1], phases[2], phases[3], r.stats_kinds
+                );
+            }
+        }
         Some("vox-test") => {
             // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).
             let res = Resources::load(&args[2]).expect("load");

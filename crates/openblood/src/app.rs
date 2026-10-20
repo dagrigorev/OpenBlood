@@ -44,6 +44,12 @@ pub struct App {
     pub menu: crate::menu::Menu,
     pub menu_open: bool,
     start_time: Instant,
+    /// Window-sized image (letterboxed modes) the HUD is drawn on before presenting.
+    out: Vec<u32>,
+    /// F12 pressed: save the next presented frame.
+    shot_pending: bool,
+    prof_log: Vec<String>,
+    last_switch: Instant,
     message: Option<(String, Instant)>,
 }
 
@@ -65,7 +71,11 @@ impl App {
             game,
             level_index,
             levels,
-            renderer: Renderer::new(640, 400),
+            renderer: {
+                let mut r = Renderer::new(640, 400);
+                r.keep_rows = false;
+                r
+            },
             window: None,
             surface: None,
             keys: HashSet::new(),
@@ -83,6 +93,10 @@ impl App {
             menu: crate::menu::Menu::new(),
             menu_open: false,
             start_time: Instant::now(),
+            out: Vec::new(),
+            shot_pending: false,
+            prof_log: Vec::new(),
+            last_switch: Instant::now(),
             message: None,
         }
     }
@@ -374,10 +388,12 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f64();
         self.last = now;
+        let mut prof = Profile::new(dt);
         let input = self.build_input(dt);
         if !self.menu_open {
             self.game.update(&self.res, &input, dt);
         }
+        prof.mark("update");
 
         let events: Vec<GameEvent> = self.game.events.drain(..).collect();
         for e in events {
@@ -398,6 +414,7 @@ impl App {
             }
             a.update_listener(&self.game);
         }
+        prof.mark("audio");
 
         let Some(window) = self.window.clone() else { return };
         let size = window.inner_size();
@@ -434,30 +451,22 @@ impl App {
             voxels: &self.res.voxels,
             ror: &self.game.world.ror_view,
         };
-        self.renderer.render(&scene, &cam);
+        prof.mark("prepare");
+        // The main menu (outside a game) covers the whole screen: skip the 3D view.
+        if !(self.menu_open && !self.menu.in_game) {
+            self.renderer.render(&scene, &cam);
+        }
+        prof.mark("render");
 
         let (qid, _) = self.game.weapon_view();
         let weapon = self.game.anims.qav(&self.res.blood, qid);
-        hud::draw(
-            &mut self.renderer.frame,
-            rw,
-            rh,
-            &self.res,
-            &self.luts,
-            &self.game,
-            weapon.as_deref(),
-            self.show_stats.then_some(self.fps),
-            self.message
-                .as_ref()
-                .filter(|m| m.1.elapsed().as_secs_f64() < 3.0)
-                .map(|m| m.0.as_str()),
-        );
-        if self.menu_open {
-            let o = self.options_view();
-            let t = self.start_time.elapsed().as_secs_f64();
-            self.menu
-                .draw(&mut self.renderer.frame, rw, rh, &self.res, &self.luts, t, &o);
-        }
+        let message = self
+            .message
+            .as_ref()
+            .filter(|m| m.1.elapsed().as_secs_f64() < 3.0)
+            .map(|m| m.0.clone());
+        let menu_view = self.menu_open.then(|| self.options_view());
+        let menu_time = self.start_time.elapsed().as_secs_f64();
 
         let Some(surface) = self.surface.as_mut() else { return };
         if surface
@@ -467,11 +476,54 @@ impl App {
             return;
         }
         let Ok(mut buf) = surface.buffer_mut() else { return };
-        if (dw, dh) != (ww, wh) {
-            buf.fill(0);
+        // Scale the renderer's column-major image straight to window size, then draw the
+        // HUD and menu at window resolution (sharp, and cheap even with supersampling).
+        let direct = (dw, dh) == (ww, wh);
+        if !direct {
+            self.out.resize(dw * dh, 0);
         }
-        crate::scale::resample(&self.renderer.frame, rw, rh, &mut buf, ww, ox, oy, dw, dh, self.cfg.upscale);
+        let target: &mut [u32] = if direct { &mut buf[..] } else { &mut self.out[..] };
+        let (cols, _, _) = self.renderer.columns();
+        crate::scale::resample_cols(cols, rw, rh, target, dw, 0, 0, dw, dh, self.cfg.upscale);
+        prof.mark("scale");
+        hud::draw(
+            target,
+            dw,
+            dh,
+            &self.res,
+            &self.luts,
+            &self.game,
+            weapon.as_deref(),
+            self.show_stats.then_some(self.fps),
+            message.as_deref(),
+        );
+        if let Some(o) = &menu_view {
+            self.menu.draw(target, dw, dh, &self.res, &self.luts, menu_time, o);
+        }
+        if std::mem::take(&mut self.shot_pending) {
+            let path = crate::tools::screenshot_path();
+            crate::tools::save_png(&path, dw, dh, target);
+            self.message = Some((format!("Saved {path}"), Instant::now()));
+        }
+        if !direct {
+            buf.fill(0);
+            for (y, row) in self.out.chunks(dw).enumerate() {
+                let o = (oy + y) * ww + ox;
+                buf[o..o + dw].copy_from_slice(row);
+            }
+        }
+        prof.mark("hud");
+
         let _ = buf.present();
+        prof.mark("present");
+        prof.finish(&self.game.world.map_name, self.game.clock, self.start_time.elapsed().as_secs_f64(), &mut self.prof_log);
+        // Profiling aid: OB_AUTOSWITCH=N switches to the next level every N seconds.
+        if let Some(n) = std::env::var("OB_AUTOSWITCH").ok().and_then(|v| v.parse::<f64>().ok()) {
+            if self.last_switch.elapsed().as_secs_f64() > n {
+                self.last_switch = Instant::now();
+                self.change_level(1);
+            }
+        }
 
         self.fps_frames += 1;
         let el = self.fps_time.elapsed().as_secs_f64();
@@ -575,16 +627,7 @@ impl ApplicationHandler for App {
                                 self.cfg.render_scale = if self.cfg.render_scale >= 1.0 { 0.5 } else { 1.0 };
                                 self.flash(format!("Render scale {:.0}%", self.cfg.render_scale * 100.0));
                             }
-                            KeyCode::F12 => {
-                                let path = crate::tools::screenshot_path();
-                                crate::tools::save_png(
-                                    &path,
-                                    self.renderer.width,
-                                    self.renderer.height,
-                                    &self.renderer.frame,
-                                );
-                                self.flash(format!("Saved {path}"));
-                            }
+                            KeyCode::F12 => self.shot_pending = true,
                             KeyCode::F6 => self.save_slot(0),
                             KeyCode::F9 => self.load_slot(0),
                             KeyCode::F10 => {
@@ -638,5 +681,74 @@ impl ApplicationHandler for App {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+}
+
+/// Optional frame profiler: with `OB_PROFILE=1`, frames slower than 12 ms are logged to
+/// `openblood-profile.log` with the time spent in each stage.
+static PROFILE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+struct Profile {
+    on: bool,
+    dt: f64,
+    start: Instant,
+    last: Instant,
+    parts: Vec<(&'static str, f64)>,
+}
+
+impl Profile {
+    fn new(dt: f64) -> Profile {
+        let now = Instant::now();
+        Profile {
+            on: *PROFILE_ON.get_or_init(|| std::env::var_os("OB_PROFILE").is_some()),
+            dt,
+            start: now,
+            last: now,
+            parts: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, name: &'static str) {
+        if self.on {
+            let now = Instant::now();
+            self.parts.push((name, (now - self.last).as_secs_f64() * 1e3));
+            self.last = now;
+        }
+    }
+
+    fn finish(&self, map: &str, clock: i32, at: f64, log: &mut Vec<String>) {
+        let total = self.start.elapsed().as_secs_f64() * 1e3;
+        if !self.on || total < 12.0 {
+            return;
+        }
+        let parts: Vec<String> = self.parts.iter().map(|(n, t)| format!("{n} {t:.1}")).collect();
+        let line = format!(
+            "{at:7.2}s {map} tick {clock}: frame {total:.1} ms (dt {:.1} ms) | {}
+",
+            self.dt * 1e3,
+            parts.join(", ")
+        );
+        log.push(line);
+        // Written in batches: appending to the file every frame was itself slow.
+        if log.len() >= 300 {
+            flush_profile(log);
+        }
+    }
+}
+
+fn flush_profile(log: &mut Vec<String>) {
+    use std::io::Write;
+    if log.is_empty() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("openblood-profile.log") {
+        let _ = f.write_all(log.concat().as_bytes());
+    }
+    log.clear();
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        flush_profile(&mut self.prof_log);
     }
 }

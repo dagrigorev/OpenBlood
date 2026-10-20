@@ -100,6 +100,58 @@ pub fn extract(cue: &Path, out: &Path) -> io::Result<usize> {
 }
 
 /// Loads a 16-bit stereo 44.1 kHz WAV as interleaved f32 samples.
+/// Streams the PCM data of a 16-bit WAV file in half-second chunks of interleaved samples,
+/// looping forever, from a background thread. Only a few chunks are buffered (the channel is
+/// bounded), so memory stays small and nothing large is allocated at level start. The thread
+/// exits when the receiver is dropped.
+pub fn stream_wav(path: &Path) -> Option<std::sync::mpsc::Receiver<Vec<i16>>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+        return None;
+    }
+    // Find the data chunk.
+    let (start, len) = loop {
+        let mut ch = [0u8; 8];
+        f.read_exact(&mut ch).ok()?;
+        let len = u32::from_le_bytes(ch[4..8].try_into().ok()?) as u64;
+        if &ch[0..4] == b"data" {
+            break (f.stream_position().ok()?, len);
+        }
+        f.seek(SeekFrom::Current((len + (len & 1)) as i64)).ok()?;
+    };
+    if len < 4 {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(6);
+    std::thread::spawn(move || {
+        const CHUNK: usize = 44100 * 2 * 2 / 2; // half a second of 16-bit stereo, in bytes
+        let mut bytes = vec![0u8; CHUNK];
+        let mut left = len;
+        loop {
+            if left == 0 {
+                if f.seek(SeekFrom::Start(start)).is_err() {
+                    return;
+                }
+                left = len;
+            }
+            let n = (CHUNK as u64).min(left) as usize & !3;
+            if n == 0 || f.read_exact(&mut bytes[..n]).is_err() {
+                return;
+            }
+            left -= n as u64;
+            let samples: Vec<i16> = bytes[..n].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+            if tx.send(samples).is_err() {
+                return; // music stopped or changed
+            }
+        }
+    });
+    Some(rx)
+}
+
+#[allow(dead_code)]
 pub fn load_wav(path: &Path) -> Option<Vec<f32>> {
     let b = std::fs::read(path).ok()?;
     if b.len() < 44 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {

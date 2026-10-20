@@ -165,6 +165,9 @@ enum SprKind {
     Floor {
         sx0: f32,
         sx1: f32,
+        /// Screen rows the sprite can cover (from its projected corners).
+        ry0: f32,
+        ry1: f32,
         cos: f64,
         sin: f64,
         hw: f64,
@@ -176,6 +179,9 @@ enum SprKind {
         sx1: f32,
         y0: f32,
         y1: f32,
+        /// Nearest depth any part of the model can have (pixels already covered by
+        /// something nearer skip the ray cast).
+        tmin: f32,
         /// Width axis and facing axis (unit vectors), xy units per voxel, z units per voxel.
         w: (f64, f64),
         f: (f64, f64),
@@ -231,7 +237,17 @@ pub struct Renderer {
     pub sky_scale: f64,
     /// Vertical stretch emulating the 320x200 pixel aspect (1.2 in the original).
     pub y_stretch: f64,
+    /// Milliseconds spent in the last frame: walls/planes, portal sprites + projection,
+    /// masked walls + sprites, output copy.
+    pub phase_ms: [f64; 4],
+    /// Also produce the row-major [`Renderer::frame`]. Callers that scale the column-major
+    /// image themselves ([`Renderer::columns`]) turn this off to skip a full-frame copy.
+    pub keep_rows: bool,
+    /// Portal ids seen in each column during the wall pass.
+    col_portals: Vec<Vec<u32>>,
     pub stats_sectors: usize,
+    /// Projected sprites by kind (face, wall, floor, voxel) and masked wall segments.
+    pub stats_kinds: [usize; 5],
 }
 
 #[inline]
@@ -264,7 +280,11 @@ impl Renderer {
             visited: Vec::new(),
             sky_scale: 1.0,
             y_stretch: 1.2,
+            phase_ms: [0.0; 4],
+            keep_rows: true,
+            col_portals: Vec::new(),
             stats_sectors: 0,
+            stats_kinds: [0; 5],
         };
         r.resize(width, height);
         r
@@ -283,6 +303,12 @@ impl Renderer {
         self.col_depth = vec![f32::INFINITY; width * height];
         self.col_mask = vec![0; width * height];
         self.masked = (0..width).map(|_| Vec::new()).collect();
+        self.col_portals = (0..width).map(|_| Vec::new()).collect();
+    }
+
+    /// The last frame in column-major order: (pixels, width, height), `pixels[x * h + y]`.
+    pub fn columns(&self) -> (&[u32], usize, usize) {
+        (&self.col_pix, self.width, self.height)
     }
 
     fn view(&self, cam: &Camera) -> View {
@@ -322,23 +348,41 @@ impl Renderer {
         let visited = &self.visited;
 
         // Pass 1: opaque world.
+        let t0 = std::time::Instant::now();
         self.col_pix
             .par_chunks_mut(h)
             .zip(self.col_depth.par_chunks_mut(h))
             .zip(self.col_mask.par_chunks_mut(h))
             .zip(self.masked.par_iter_mut())
+            .zip(self.col_portals.par_iter_mut())
             .enumerate()
-            .for_each(|(x, (((pix, depth), mask), masked))| {
+            .for_each(|(x, ((((pix, depth), mask), masked), portals))| {
                 masked.clear();
                 mask.fill(0);
                 cast_column(x, scene, cam, &view, sky_scale, pix, depth, mask, masked, visited);
+                // Distinct portal ids in this column (the column is still in cache).
+                portals.clear();
+                let mut last = 0;
+                for &m in mask.iter() {
+                    if m != 0 && m != last && !portals.contains(&m) {
+                        portals.push(m);
+                    }
+                    last = m;
+                }
             });
 
+        let t1 = std::time::Instant::now();
         // Sprites in rooms seen through floor/ceiling portals, moved into the viewer's frame.
         let mut portal_sprites: Vec<SpriteDraw> = Vec::new();
-        let mut seen: Vec<u32> = self.col_mask.iter().copied().filter(|&m| m != 0).collect();
+        let mut seen: Vec<u32> = Vec::new();
+        for ids in &self.col_portals {
+            for &m in ids {
+                if !seen.contains(&m) {
+                    seen.push(m);
+                }
+            }
+        }
         seen.sort_unstable();
-        seen.dedup();
         for id in seen {
             let si = ((id - 1) / 2) as usize;
             let floor = (id - 1) % 2 == 1;
@@ -391,8 +435,20 @@ impl Renderer {
             .filter_map(|(i, s)| project_sprite(i, s, scene, cam, &view))
             .collect();
         sprites.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap_or(std::cmp::Ordering::Equal));
+        let mut kinds = [0usize; 5];
+        for sp in &sprites {
+            kinds[match sp.kind {
+                SprKind::Face { .. } => 0,
+                SprKind::Wall { .. } => 1,
+                SprKind::Floor { .. } => 2,
+                SprKind::Voxel { .. } => 3,
+            }] += 1;
+        }
+        kinds[4] = self.masked.iter().map(|m| m.len()).sum();
+        self.stats_kinds = kinds;
 
         // Pass 2: masked walls and sprites, back to front.
+        let t2 = std::time::Instant::now();
         self.col_pix
             .par_chunks_mut(h)
             .zip(self.col_depth.par_chunks(h))
@@ -416,13 +472,34 @@ impl Renderer {
             });
 
         // Transpose column-major into row-major output.
+        let t3 = std::time::Instant::now();
+        if !self.keep_rows {
+            self.phase_ms = [
+                (t1 - t0).as_secs_f64() * 1e3,
+                (t2 - t1).as_secs_f64() * 1e3,
+                (t3 - t2).as_secs_f64() * 1e3,
+                0.0,
+            ];
+            return;
+        }
         let w = self.width;
         let col = &self.col_pix;
-        self.frame.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-            for (x, p) in row.iter_mut().enumerate() {
-                *p = col[x * h + y];
+        // In bands of rows so each column is read as a short contiguous run (a plain
+        // per-pixel strided read was a quarter of the frame time at 8K).
+        const BAND: usize = 32;
+        self.frame.par_chunks_mut(w * BAND).enumerate().for_each(|(band, rows)| {
+            let y0 = band * BAND;
+            let n = rows.len() / w;
+            for x in 0..w {
+                let src = &col[x * h + y0..x * h + y0 + n];
+                for (k, &p) in src.iter().enumerate() {
+                    rows[k * w + x] = p;
+                }
             }
         });
+        let t4 = std::time::Instant::now();
+        let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
+        self.phase_ms = [ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4)];
     }
 
     /// Depth (perpendicular distance) at screen pixel, for hit tests and debugging.
@@ -1260,15 +1337,18 @@ fn project_voxel(
             }
         }
     }
+    // Entirely behind the camera: nothing to draw (this used to cover the whole screen and
+    // cast a ray for every pixel).
+    if !x0.is_finite() {
+        return None;
+    }
     if behind {
+        // Straddles the camera plane: can reach any part of the screen.
         x0 = 0.0;
         x1 = view.w as f64;
         y0 = 0.0;
         y1 = view.h as f64;
         depth = 1.0;
-    }
-    if !x0.is_finite() {
-        return None;
     }
     Some(SprProj {
         idx,
@@ -1279,6 +1359,7 @@ fn project_voxel(
             sx1: x1 as f32,
             y0: y0 as f32,
             y1: y1 as f32,
+            tmin: depth.min(1e9) as f32,
             w,
             f,
             unit,
@@ -1365,6 +1446,8 @@ fn project_sprite(idx: usize, s: &SpriteDraw, scene: &Scene, cam: &Camera, view:
             let (c, sn) = (a.cos(), a.sin());
             let mut minx = f64::INFINITY;
             let mut maxx = f64::NEG_INFINITY;
+            let (mut miny, mut maxy) = (f64::INFINITY, f64::NEG_INFINITY);
+            let dz = s.z - cam.z;
             let mut any_behind = false;
             for (u, v) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
                 let wx = s.x + u * c - v * sn;
@@ -1380,10 +1463,21 @@ fn project_sprite(idx: usize, s: &SpriteDraw, scene: &Scene, cam: &Camera, view:
                 let sx = half_w + sd / f * view.fl;
                 minx = minx.min(sx);
                 maxx = maxx.max(sx);
+                let sy = view.horizon + dz / 16.0 / f * view.fly;
+                miny = miny.min(sy);
+                maxy = maxy.max(sy);
             }
             if any_behind {
                 minx = 0.0;
                 maxx = view.w as f64;
+                // Part of it is behind the camera: it reaches the screen edge on its side.
+                if dz > 0.0 {
+                    maxy = view.h as f64;
+                    miny = miny.min(view.h as f64);
+                } else {
+                    miny = 0.0;
+                    maxy = maxy.max(0.0);
+                }
             }
             if !minx.is_finite() {
                 return None;
@@ -1394,6 +1488,8 @@ fn project_sprite(idx: usize, s: &SpriteDraw, scene: &Scene, cam: &Camera, view:
                 kind: SprKind::Floor {
                     sx0: minx as f32,
                     sx1: maxx as f32,
+                    ry0: (miny - 1.0) as f32,
+                    ry1: (maxy + 1.0) as f32,
                     cos: c,
                     sin: sn,
                     hw,
@@ -1524,6 +1620,7 @@ fn draw_sprite_column(
             sx1,
             y0,
             y1,
+            tmin,
             w,
             f,
             unit,
@@ -1546,6 +1643,9 @@ fn draw_sprite_column(
             let r0 = (y0 as f64).max(0.0).floor() as usize;
             let r1 = ((y1 as f64).ceil() as isize).clamp(0, view.h as isize) as usize;
             for y in r0..r1 {
+                if depth[y] <= tmin || !shown(y) {
+                    continue; // hidden behind something nearer than the whole model
+                }
                 let dzz = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
                 let Some((t, c)) = v.cast([ox, oy, oz], [ddx, ddy, dzz / zunit]) else {
                     continue;
@@ -1561,6 +1661,8 @@ fn draw_sprite_column(
         SprKind::Floor {
             sx0,
             sx1,
+            ry0,
+            ry1,
             cos,
             sin,
             hw,
@@ -1580,6 +1682,9 @@ fn draw_sprite_column(
             } else {
                 (0, (view.horizon.min(h).ceil() as isize).max(0) as usize)
             };
+            // Only the rows its corners project to (a decal far away is a thin strip).
+            let r0 = r0.max(ry0.max(0.0) as usize);
+            let r1 = r1.min((ry1.max(0.0) as usize).min(view.h));
             for y in r0..r1 {
                 let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
                 if k.abs() < 1e-12 {
