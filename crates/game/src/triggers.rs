@@ -888,6 +888,36 @@ impl Triggers {
     }
 }
 
+/// True when two non-adjacent edges of sector `s` cross, using wall positions `pos`.
+fn sector_folds(world: &World, s: usize, pos: &[(i32, i32)]) -> bool {
+    let edges: Vec<((f64, f64), (f64, f64))> = world
+        .sector_walls(s)
+        .map(|w| {
+            let a = pos[w];
+            let b = pos[world.walls[w].point2 as usize];
+            ((a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64))
+        })
+        .collect();
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    for i in 0..edges.len() {
+        for j in i + 1..edges.len() {
+            let (p1, p2) = edges[i];
+            let (q1, q2) = edges[j];
+            if p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2 {
+                continue;
+            }
+            let d1 = cross(q1, q2, p1);
+            let d2 = cross(q1, q2, p2);
+            let d3 = cross(p1, p2, q1);
+            let d4 = cross(p1, p2, q2);
+            if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1002,34 +1032,4 @@ mod tests {
             assert!((wave(1.0, k) - 1.0).abs() < 1e-9);
         }
     }
-}
-
-/// True when two non-adjacent edges of sector `s` cross, using wall positions `pos`.
-fn sector_folds(world: &World, s: usize, pos: &[(i32, i32)]) -> bool {
-    let edges: Vec<((f64, f64), (f64, f64))> = world
-        .sector_walls(s)
-        .map(|w| {
-            let a = pos[w];
-            let b = pos[world.walls[w].point2 as usize];
-            ((a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64))
-        })
-        .collect();
-    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
-    for i in 0..edges.len() {
-        for j in i + 1..edges.len() {
-            let (p1, p2) = edges[i];
-            let (q1, q2) = edges[j];
-            if p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2 {
-                continue;
-            }
-            let d1 = cross(q1, q2, p1);
-            let d2 = cross(q1, q2, p2);
-            let d3 = cross(p1, p2, q1);
-            let d4 = cross(p1, p2, q2);
-            if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
-                return true;
-            }
-        }
-    }
-    false
 }

@@ -237,6 +237,8 @@ pub struct XSector {
 }
 
 impl XSector {
+    // Fields are assigned one by one in bitstream order; each read advances the reader.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn parse(b: &[u8]) -> Self {
         let mut r = BitReader::new(b);
         let mut x = XSector::default();
@@ -353,6 +355,8 @@ pub struct XWall {
 }
 
 impl XWall {
+    // Fields are assigned one by one in bitstream order; each read advances the reader.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn parse(b: &[u8]) -> Self {
         let mut r = BitReader::new(b);
         let mut x = XWall::default();
@@ -450,6 +454,8 @@ pub struct XSprite {
 }
 
 impl XSprite {
+    // Fields are assigned one by one in bitstream order; each read advances the reader.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn parse(b: &[u8]) -> Self {
         let mut r = BitReader::new(b);
         let mut x = XSprite::default();
@@ -675,7 +681,12 @@ impl Map {
         if encrypted {
             map_crypt(&mut sky, (nsky * 2) as u32);
         }
-        m.sky_offsets = sky.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        m.sky_offsets = sky
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
 
         let rev = m.revision as u32;
         m.xsectors.push(XSector::default());

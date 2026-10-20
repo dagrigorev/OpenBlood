@@ -596,11 +596,8 @@ pub fn run_tool(args: &[String]) -> bool {
                     img[y as usize * n + x as usize] = c;
                 }
             };
-            let line = |img: &mut Vec<u32>,
-                        put: &mut dyn FnMut(&mut Vec<u32>, f64, f64, u32),
-                        a: (f64, f64),
-                        b: (f64, f64),
-                        c: u32| {
+            type Plot<'a> = dyn FnMut(&mut Vec<u32>, f64, f64, u32) + 'a;
+            let line = |img: &mut Vec<u32>, put: &mut Plot<'_>, a: (f64, f64), b: (f64, f64), c: u32| {
                 let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).max(1);
                 for k in 0..=steps {
                     let t = k as f64 / steps as f64;
@@ -819,7 +816,7 @@ pub fn run_tool(args: &[String]) -> bool {
             let t0 = std::time::Instant::now();
             while v.next_frame().expect("decode") {
                 let n = v.position() - 1;
-                if n % step == 0 {
+                if n.is_multiple_of(step) {
                     let out = std::path::Path::new(&args[3]).join(format!("f{n:04}.png"));
                     save_png(out.to_str().unwrap(), v.width, v.height, &v.pixels());
                 }

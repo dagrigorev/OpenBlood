@@ -173,7 +173,7 @@ impl TileSet {
             return pic;
         }
         let frames = a.frames as i32;
-        let i = (clock >> a.speed) as i32;
+        let i = clock >> a.speed;
         let off = match a.anim_type {
             1 => {
                 let k = i % (frames * 2);

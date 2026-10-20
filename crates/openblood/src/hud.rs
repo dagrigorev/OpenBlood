@@ -59,6 +59,7 @@ fn glyph(c: char) -> [u8; 7] {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_text(frame: &mut [u32], w: usize, h: usize, x: i32, y: i32, scale: i32, color: u32, text: &str) {
     let mut cx = x;
     for ch in text.chars() {
@@ -91,6 +92,7 @@ pub fn text_width(text: &str, scale: i32) -> i32 {
 }
 
 /// Draws a QAV frame (weapon) in 320x200 virtual space, centred horizontally.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_qav(
     frame: &mut [u32],
     w: usize,
@@ -136,8 +138,9 @@ pub fn draw_qav(
         let shade = (l.shade as i32 + base_shade).clamp(0, 63) as usize * 256;
         let trans = l.stat & 1 != 0;
         let yflip = l.stat & 4 != 0;
-        let px0 = x0.max(0.0) as usize;
         let px1 = (x0 + sw).min(w as f64).max(0.0) as usize;
+        // Clamped so a layer entirely right of the screen gives an empty (not inverted) range.
+        let px0 = (x0.max(0.0) as usize).min(px1);
         let py0 = y0.max(0.0) as usize;
         let py1 = (y0 + shh).min(h as f64).max(0.0) as usize;
         for py in py0..py1 {
@@ -147,15 +150,15 @@ pub fn draw_qav(
                 ty = tile.height as usize - 1 - ty;
             }
             let row = &mut frame[py * w..py * w + w];
-            for px in px0..px1 {
+            for (px, out) in (px0..px1).zip(&mut row[px0..px1]) {
                 let tx = ((((px as f64 + 0.5 - x0) / sw) * tw) as usize).min(tile.width as usize - 1);
                 let c = tile.pixels[tx * tile.height as usize + ty];
                 if c == 255 {
                     continue;
                 }
                 let rgb = lut[shade + c as usize];
-                row[px] = if trans {
-                    let d = row[px];
+                *out = if trans {
+                    let d = *out;
                     let m = |sh: u32| ((((d >> sh) & 255) + ((rgb >> sh) & 255)) / 2) << sh;
                     m(16) | m(8) | m(0)
                 } else {

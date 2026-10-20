@@ -63,7 +63,7 @@ impl Game {
                     if starts_buried(s.lotag)
                         && !self.player.dead
                         && dist < 1400.0
-                        && (self.clock as usize + i) % 10 == 0
+                        && (self.clock as usize + i).is_multiple_of(10)
                         && self.can_see_player(i)
                     {
                         self.rise(res, i);
@@ -72,7 +72,7 @@ impl Game {
                 Ai::Rise | Ai::Attack | Ai::Recoil => self.dude_gravity(i, &info, dt),
                 Ai::Idle => {
                     self.idle_wander(res, i, &info, dist, dt);
-                    if self.player.dead || dist > 12000.0 || (self.clock as usize + i) % 15 != 0 {
+                    if self.player.dead || dist > 12000.0 || !(self.clock as usize + i).is_multiple_of(15) {
                         continue;
                     }
                     let to = (py - s.y as f64).atan2(px - s.x as f64).to_degrees() / 360.0 * 2048.0;
@@ -109,7 +109,7 @@ impl Game {
             Attack::None => false,
         };
         // Sight is re-checked every few ticks and cached in `sees`.
-        if (self.clock as usize + i) % 6 == 0 {
+        if (self.clock as usize + i).is_multiple_of(6) {
             self.sees[i] = self.can_see_player(i);
         }
         let sees = self.sees[i];
@@ -129,7 +129,7 @@ impl Game {
                 self.world.rt[i].ai_timer -= 1;
                 if self.world.rt[i].ai_timer <= 0 {
                     self.world.rt[i].ai_timer = (TICK_RATE * (0.8 + (self.rand() % 70) as f64 / 100.0)) as i32;
-                    self.world.rt[i].ai_state = if self.rand() % 2 == 0 { 1 } else { -1 };
+                    self.world.rt[i].ai_state = if self.rand().is_multiple_of(2) { 1 } else { -1 };
                 }
                 let side = self.world.rt[i].ai_state.signum().max(-1) as f64;
                 let side = if side == 0.0 { 1.0 } else { side };

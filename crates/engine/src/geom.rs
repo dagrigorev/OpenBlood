@@ -133,8 +133,8 @@ pub fn update_sector_z(sectors: &[Sector], walls: &[Wall], x: f64, y: f64, z: f6
             return hint;
         }
         let sec = &sectors[h];
-        for i in sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize {
-            let ns = walls[i].nextsector;
+        for wall in &walls[sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize] {
+            let ns = wall.nextsector;
             if ns >= 0 && ok(ns as usize) {
                 return ns as i32;
             }
@@ -150,6 +150,7 @@ pub fn update_sector_z(sectors: &[Sector], walls: &[Wall], x: f64, y: f64, z: f6
 /// Ray/segment intersection. Returns `(t, s)` where the hit point is `o + d*t`
 /// and `s` in `[0,1]` is the position along the segment `a -> b`.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub fn ray_segment(ox: f64, oy: f64, dx: f64, dy: f64, ax: f64, ay: f64, bx: f64, by: f64) -> Option<(f64, f64)> {
     let ex = bx - ax;
     let ey = by - ay;

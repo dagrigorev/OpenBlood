@@ -77,7 +77,13 @@ impl Resources {
             .unwrap_or_default();
         let voxel_ids = find_file(&dir, "VOXEL.DAT")
             .and_then(|p| std::fs::read(p).ok())
-            .map(|b| b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect())
+            .map(|b| {
+                b.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                    .collect()
+            })
             .unwrap_or_default();
         let ini = find_file(&dir, "BLOOD.INI")
             .and_then(|p| std::fs::read(p).ok())
