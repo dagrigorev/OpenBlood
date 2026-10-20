@@ -4,6 +4,7 @@
 
 - **Rust** 1.88 or newer (edition 2021) via [rustup](https://rustup.rs).
 - **Windows:** the MSVC toolchain (Visual Studio Build Tools with the C++ workload).
+- **macOS:** Xcode command line tools (`xcode-select --install`).
 - **Linux:** a C toolchain plus ALSA headers for audio:
   `sudo apt install build-essential pkg-config libasound2-dev`.
 

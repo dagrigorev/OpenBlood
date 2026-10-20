@@ -15,7 +15,7 @@
 ![E3M1](screenshots/map_e3m1.png)
 
 An open-source engine, written from scratch in Rust, that plays **Blood (1997)** on modern
-Windows PCs at any resolution — including 4K — using the data files from **your own copy**
+Windows, Linux and macOS computers at any resolution — including 4K — using the data files from **your own copy**
 of the game.
 
 OpenBlood contains **no** Blood game content (maps, art, sounds, music, executables).
@@ -214,7 +214,7 @@ Developer tools (`openblood <tool> ...`):
 
 ## Releases and CI
 
-Every push to `master` builds and tests Windows and Linux packages; a maintainer approves the
+Every push to `master` builds and tests Windows (x64, ARM64), Linux and macOS (universal) packages; a maintainer approves the
 build before it is published as a GitHub release, and the wiki's
 [Releases](https://github.com/dagrigorev/OpenBlood/wiki/Releases) page updates itself. Pull
 requests run formatting, lint, test and rustdoc checks. Details:

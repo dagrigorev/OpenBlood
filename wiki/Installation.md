@@ -9,10 +9,16 @@ Get the latest build from the [Releases](Releases) page:
 | Platform | File |
 | --- | --- |
 | Windows 10/11, 64-bit | `openblood-<version>-windows-x64.zip` |
+| Windows 11 on ARM | `openblood-<version>-windows-arm64.zip` |
+| macOS 11+, Apple silicon or Intel | `openblood-<version>-macos-universal.tar.gz` |
 | Linux, 64-bit (X11 or Wayland, ALSA/PulseAudio/PipeWire) | `openblood-<version>-linux-x64.tar.gz` |
 
 Unpack it into a folder of its own, for example `C:\Games\OpenBlood`. Each release also lists
 `SHA256SUMS.txt` to verify the download.
+
+**macOS:** the binary is not signed or notarized. After unpacking, allow it once with
+`xattr -d com.apple.quarantine openblood` (or right-click, Open), then start it from Terminal
+with `./openblood`.
 
 ## 2. Install and patch Blood
 

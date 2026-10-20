@@ -16,7 +16,6 @@
 
 ## Ideas
 
-- More platforms in the release pipeline (macOS, Windows ARM64).
 - More measured enemy behaviour from DOSBox recordings.
 
 Have something to add? See [Contributing](Contributing).

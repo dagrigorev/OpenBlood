@@ -4,11 +4,11 @@ Three GitHub Actions workflows live in `.github/workflows/`.
 
 ```mermaid
 flowchart LR
-    PR[Pull request / feature branch] --> CI[CI: fmt, clippy, tests Win+Linux, rustdoc]
+    PR[Pull request / feature branch] --> CI[CI: fmt, clippy, tests Win/Linux/macOS, rustdoc]
     M[Push to master] --> REL[Release workflow]
     M --> DOCS[Docs and wiki workflow]
     REL --> P[prepare: version + notes]
-    P --> B[build + test: windows-x64, linux-x64]
+    P --> B[build + test: windows x64/arm64, linux-x64, macos-universal]
     B --> G{{"approval: environment 'release'"}}
     G --> PUB[publish GitHub release]
     PUB --> W[update wiki Releases page]
@@ -24,7 +24,7 @@ Runs on pull requests and pushes to branches other than `master`:
 | --- | --- |
 | rustfmt | `cargo fmt --all -- --check` (must pass) |
 | clippy | `cargo clippy --workspace --all-targets -- -D warnings` (must pass) |
-| test | `cargo test --workspace` and `cargo build --release` on Windows and Linux |
+| test | `cargo test --workspace` and `cargo build --release` on Windows x64, Windows ARM64, Linux and macOS |
 | rustdoc | `cargo doc --workspace --no-deps --document-private-items` with warnings as errors |
 
 ## Release (`release.yml`)
@@ -35,9 +35,10 @@ Actions tab.
 
 1. **Version and notes.** The tag is `v<workspace version>.<run number>`, for example
    `v0.1.0.12`. Release notes list the commits since the previous `v*` tag.
-2. **Build.** Windows and Linux runners run the unit tests, build in release mode and package
-   `openblood-<tag>-windows-x64.zip` and `openblood-<tag>-linux-x64.tar.gz` (binary, README,
-   license).
+2. **Build.** Native runners for Windows x64, Windows ARM64, Linux x64 and macOS run the unit
+   tests, build in release mode and package `openblood-<tag>-windows-x64.zip`,
+   `-windows-arm64.zip`, `-linux-x64.tar.gz` (stripped) and `-macos-universal.tar.gz` (one
+   binary for arm64 and x86_64, merged with `lipo`), each with README and license.
 3. **Approval.** The publish job uses the `release` environment, which has **required
    reviewers**. The run pauses with *Waiting for review*; a reviewer opens the run, clicks
    **Review deployments**, ticks `release` and approves (or rejects). Nothing is published
