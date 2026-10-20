@@ -3,7 +3,6 @@
 ## Not implemented yet
 
 - Multiplayer (bloodbath and co-op start channels are parsed but unused).
-- MIDI music fallback when no CD tracks were ripped.
 - The full set of enemy behaviours; health and damage of most enemies are not measured yet.
 
 ## Known differences from the original

@@ -55,7 +55,8 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
   Level start fires on the player's first move, like the original.
 - Sliding/rotating sectors carry sprites and the player (boats, trains, moving platforms).
 - Sector lighting effects, ambient/sector/one-shot sounds with 3D panning, CD-audio music
-  ripped from your own disc image.
+  ripped from your own disc image. Without ripped tracks, the level's MIDI song plays through a
+  clean-room FM (OPL-style) synthesizer with Blood's own AdLib instrument bank.
 
 **Combat and enemies**
 
@@ -89,7 +90,7 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 - Quick save and five slots, deterministic restore of the whole game state.
   (Saves from older OpenBlood versions can't be loaded after a save-format change.)
 
-Not yet: multiplayer, MIDI music fallback, the full set of enemy behaviours, health/damage
+Not yet: multiplayer, the full set of enemy behaviours, health/damage
 measurements for most enemies.
 
 Known differences: the E1M1 starting coffin still looks different above the coffin walls
@@ -102,7 +103,7 @@ screenshots of the original and now match closely.
 2. Copy these files from the Blood directory next to `openblood.exe` (or set `data_dir` in
    `openblood.ini`): `BLOOD.RFF`, `SOUNDS.RFF`, `GUI.RFF`, `TILES000.ART`…`TILES017.ART`,
    `SURFACE.DAT`, `VOXEL.DAT`, `TABLES.DAT`, `BLOOD.INI`.
-3. Optional music and cutscenes: rip the CD audio tracks and copy the cutscene videos from
+3. Optional CD music and cutscenes (without them the FM/MIDI music plays): rip the CD audio tracks and copy the cutscene videos from
    your disc image: `openblood extract-cd BLOODCD1.cue music` (music to `music/`, cutscenes
    to `movie/`; `openblood extract-movies BLOODCD1.cue movie` copies only the videos).
 4. Run `openblood.exe` (fullscreen at native resolution by default).
@@ -199,7 +200,7 @@ Crates: `ob-engine` (formats, geometry, collision, renderer), `ob-game` (Blood g
 
 Developer tools (`openblood <tool> ...`):
 
-- Data: `rff-list`, `rff-extract`, `map-info`, `walls`, `sprites`, `chan`, `tile`, `sheet`,
+- Data: `rff-list`, `rff-extract`, `midi-info`, `midi-render`, `map-info`, `walls`, `sprites`, `chan`, `tile`, `sheet`,
   `qav`, `survey`, `find-vox`, `vox-test`, `extract-cd`.
 - Rendering: `shot` / `shotg` (render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera
   at a sprite, `OB_CAM=x,y,z,ang` places it, `OB_ACT=1` starts the level, `OB_NOMSG=1` hides the

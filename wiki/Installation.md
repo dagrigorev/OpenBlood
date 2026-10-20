@@ -39,7 +39,9 @@ directory and in a `blood` subfolder next to the executable.
 ## 4. Optional: music and cutscenes
 
 Blood's music is CD audio, and the cutscenes are Smacker videos on the disc. OpenBlood reads
-both straight from an image of **your** disc (CUE/BIN):
+both straight from an image of **your** disc (CUE/BIN). Without ripped tracks, each level plays
+its MIDI song from `SOUNDS.RFF` through OpenBlood's FM synthesizer, like the original with an
+AdLib or Sound Blaster card.
 
 ```
 openblood extract-cd BLOODCD1.cue music
@@ -74,7 +76,7 @@ All options are described in [Configuration](Configuration); the keys are in
 | Symptom | Fix |
 | --- | --- |
 | "OpenBlood needs the files from your original Blood installation" | `BLOOD.RFF` was not found. Copy the data files (step 3) or set `data_dir`. |
-| No music | Rip the CD tracks (step 4) and check `music = 1` in `openblood.ini`. |
+| No music | Check `music = 1` in `openblood.ini` and the music volume. Ripped CD tracks (step 4) replace the FM/MIDI music. |
 | Low frame rate at 4K | Lower **Anti-aliasing** or **Render Scale** in Options, or cap FPS. |
 | Saved games from an older build will not load | Save-format changes are not backwards compatible; start the level again. |
 | Linux: no sound | Install the ALSA runtime (`libasound2`) or the PipeWire/PulseAudio ALSA plugin. |

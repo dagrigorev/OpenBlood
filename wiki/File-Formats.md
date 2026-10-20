@@ -15,6 +15,7 @@ was used. All values are little endian.
 | Sprite sequence | `*.SEQ` | `ob_game::anim` |
 | Weapon/HUD animation | `*.QAV` | `ob_game::anim` |
 | Sound | `*.SFX` + `*.RAW` in SOUNDS.RFF | `openblood::audio` |
+| Music (fallback) | `*.MID` + `GMTIMBRE.TMB` in SOUNDS.RFF | `openblood::midi`, `openblood::fm` |
 | Video | `*.SMK` on the CD | `ob_engine::smk` |
 | CD audio | CUE/BIN image | `openblood::cdaudio` |
 | Episodes and levels | `BLOOD.INI` | `ob_game::ini` |
@@ -103,6 +104,27 @@ Only the first (full-detail) mip level is used. OpenBlood scales voxels by sprit
 
 `SFX` descriptors (relVol, pitch, pitchRange, format, loopStart, `rawName[9]`) point at `RAW`
 sample data in SOUNDS.RFF: unsigned 8-bit mono; `format` selects 11025, 22050 or 44100 Hz.
+
+## MIDI songs and the timbre bank
+
+The 12 songs are Standard MIDI Files (format 1, 480 ticks per quarter note, General MIDI
+programs, channel 10 for drums). OpenBlood also understands Apogee's EMIDI controllers
+(110/111 track designation per device, 112/113 device program and volume, 116-119 song and
+track loops), although Blood's songs do not use them; songs restart when every track has ended.
+
+`GMTIMBRE.TMB` is an AdLib instrument bank: 256 records of 13 bytes. Entries 0-127 are the
+General MIDI programs, 128-255 the drum keys (128 + key).
+
+| Bytes | Meaning (modulator, carrier) |
+| --- | --- |
+| 0-1 | OPL register 0x20: tremolo, vibrato, sustain, key-scale rate, frequency multiplier |
+| 2-3 | 0x40: key-scale level, total level |
+| 4-5 | 0x60: attack and decay rates |
+| 6-7 | 0x80: sustain level and release rate |
+| 8-9 | 0xE0: waveform |
+| 10 | 0xC0: feedback and connection (FM or additive) |
+| 11 | transpose (melodic) or the key to play (drums) |
+| 12 | velocity sensitivity |
 
 ## Smacker video
 

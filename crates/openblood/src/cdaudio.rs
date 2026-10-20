@@ -58,7 +58,8 @@ pub fn parse_cue(path: &Path) -> io::Result<(PathBuf, Vec<CueTrack>)> {
     Ok((bin, tracks))
 }
 
-fn write_wav(path: &Path, pcm: &[u8]) -> io::Result<()> {
+/// Writes 16-bit stereo 44.1 kHz PCM bytes as a WAV file.
+pub fn write_wav(path: &Path, pcm: &[u8]) -> io::Result<()> {
     let mut f = io::BufWriter::new(std::fs::File::create(path)?);
     let data_len = pcm.len() as u32;
     f.write_all(b"RIFF")?;

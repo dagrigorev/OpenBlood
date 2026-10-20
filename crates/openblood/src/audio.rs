@@ -147,7 +147,10 @@ pub struct Audio {
     cache: HashMap<i32, Option<Arc<Sound>>>,
     map_name: String,
     rng: u32,
-    track: u32,
+    /// CD track and song of the music playing (to keep it going across reloads).
+    music: (u32, String),
+    /// AdLib timbre bank for MIDI music (GMTIMBRE.TMB), if present.
+    timbres: Option<Vec<crate::fm::Timbre>>,
 }
 
 impl Audio {
@@ -197,7 +200,12 @@ impl Audio {
             cache: HashMap::new(),
             map_name: String::new(),
             rng: 12345,
-            track: 0,
+            music: (0, String::new()),
+            timbres: res
+                .sounds
+                .as_ref()
+                .and_then(|r| r.read_name("GMTIMBRE.TMB"))
+                .and_then(|b| crate::midi::parse_bank(&b)),
         };
         audio.preload_all(res);
         Ok(audio)
@@ -406,8 +414,11 @@ impl Audio {
 
     pub fn level_changed(&mut self, res: &Resources, game: &Game) {
         self.start_level(res, game);
-        let track = res.ini.map(&game.world.map_name).map_or(0, |m| m.track);
-        self.play_track(res, track);
+        let (track, song) = res
+            .ini
+            .map(&game.world.map_name)
+            .map_or((0, String::new()), |m| (m.track, m.song.clone()));
+        self.play_music(res, track, &song);
     }
 
     pub fn set_volumes(&mut self, sfx: f32, music: f32) {
@@ -416,28 +427,50 @@ impl Audio {
         m.music_vol = music;
     }
 
-    /// Plays CD track `n` from `music/TRACKnn.WAV` (ripped from the user's own disc).
-    pub fn play_track(&mut self, res: &Resources, n: u32) {
-        if n == self.track {
+    /// Plays CD track `n` from `music/TRACKnn.WAV` (ripped from the user's own disc). When
+    /// that file is missing, plays the MIDI `song` from SOUNDS.RFF with the FM synthesizer.
+    pub fn play_music(&mut self, res: &Resources, n: u32, song: &str) {
+        let key = (n, song.to_ascii_uppercase());
+        if key == self.music {
             return;
         }
-        self.track = n;
+        self.music = key;
         let mixer = self.mixer.clone();
         mixer.lock().unwrap().music = None;
-        if n == 0 {
-            return;
-        }
         let candidates = [
             res.dir.join("music").join(format!("TRACK{n:02}.WAV")),
             res.dir.join(format!("TRACK{n:02}.WAV")),
         ];
         // Streamed from disk: no big allocation or conversion when a level starts.
-        if let Some(rx) = candidates.iter().find_map(|p| crate::cdaudio::stream_wav(p)) {
+        let rx = (n != 0)
+            .then(|| candidates.iter().find_map(|p| crate::cdaudio::stream_wav(p)))
+            .flatten()
+            .or_else(|| self.midi_stream(res, song));
+        if let Some(rx) = rx {
             mixer.lock().unwrap().music = Some(MusicStream {
                 rx,
                 cur: Vec::new(),
                 pos: 0.0,
             });
+        }
+    }
+
+    /// Synthesized playback of `NAME.MID` from SOUNDS.RFF.
+    fn midi_stream(&self, res: &Resources, song: &str) -> Option<std::sync::mpsc::Receiver<Vec<i16>>> {
+        if song.is_empty() {
+            return None;
+        }
+        let bank = self.timbres.clone()?;
+        let bytes = res
+            .sounds
+            .as_ref()?
+            .read_name(&format!("{}.MID", song.to_ascii_uppercase()))?;
+        match crate::midi::Song::parse(&bytes) {
+            Ok(s) => Some(crate::midi::stream(s, bank)),
+            Err(e) => {
+                eprintln!("{song}.MID: {e}");
+                None
+            }
         }
     }
 }

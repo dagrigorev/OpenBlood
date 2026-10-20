@@ -18,6 +18,8 @@ CPU framebuffer), `cpal` (audio output), `png` (screenshots), `rayon`.
 | `menu` | Front-end menus (episodes, difficulty, options, save/load, help, credits) | `Menu`, `Screen`, `MenuAction`, `SKILLS` |
 | `audio` | SFX/RAW mixing with 3D panning, preloading, music streaming, cutscene audio channel | `Audio`, `Sound`, `parse_sfx`, `MOVIE_OWNER` |
 | `cdaudio` | CUE/BIN parsing, Red Book track ripping, ISO 9660 reading of the data track, WAV streaming | `parse_cue`, `extract`, `extract_dir`, `stream_wav` |
+| `fm` | Clean-room two-operator FM voices (OPL2/OPL3 style): envelopes, waveforms, feedback, key scaling, tremolo, vibrato | `Voice`, `Timbre` |
+| `midi` | Standard MIDI files with EMIDI track/loop controllers, AdLib timbre bank, sequencer and streaming thread | `Song`, `Player`, `parse_bank`, `stream` |
 | `movie` | Cutscene playback (Smacker video + separate WAV soundtrack) | `Movie`, `intro`, `find` |
 | `tools` | Command-line developer tools (`openblood <tool> ...`) | `run_tool`, `shot`, `save_png` |
 
@@ -35,7 +37,10 @@ CPU framebuffer), `cpal` (audio output), `png` (screenshots), `rayon`.
 
 All sound effects are decoded once at startup (`Audio::preload_all`, 8-bit samples, ~10 ms).
 CD music is streamed from `music/TRACKnn.WAV` in half-second chunks over a bounded channel, so
-level changes never load a whole track. Cutscenes take over a dedicated owner channel and mute
+level changes never load a whole track. When the level's track was not ripped, `midi::stream`
+renders its `Song=` from BLOOD.INI (`NAME.MID` in SOUNDS.RFF) with the FM voices and the
+`GMTIMBRE.TMB` instrument bank into the same kind of chunks, on a background thread (about 30x
+faster than real time). Cutscenes take over a dedicated owner channel and mute
 music while playing.
 
 ## Profiling
