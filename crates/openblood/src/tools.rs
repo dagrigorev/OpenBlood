@@ -233,7 +233,11 @@ pub fn run_tool(args: &[String]) -> bool {
                 cam.ang = p[3];
                 cam.sector = ob_engine::geom::update_sector(&g.world.sectors, &g.world.walls, cam.x, cam.y, -1);
                 let (_, f) = g.world.zs_at(cam.sector.max(0) as usize, cam.x, cam.y);
-                cam.z = if p[2] != 0.0 { p[2] } else { f - ob_game::player::EYE_STAND };
+                cam.z = if p[2] != 0.0 {
+                    p[2]
+                } else {
+                    f - ob_game::player::EYE_STAND
+                };
             }
             if let Some(e) = std::env::var("OB_EYE").ok().and_then(|v| v.parse::<f64>().ok()) {
                 cam.z = g.player.z - e;
@@ -320,7 +324,8 @@ pub fn run_tool(args: &[String]) -> bool {
                     &g,
                     q.as_deref(),
                     None,
-                    Some("Picked up Sawed-off"),
+                    // OB_NOMSG hides the sample pickup message (clean screenshots).
+                    std::env::var("OB_NOMSG").is_err().then_some("Picked up Sawed-off"),
                 );
             }
             save_png(&args[4], w, h, &r.frame);
@@ -333,7 +338,10 @@ pub fn run_tool(args: &[String]) -> bool {
                 Err(e) => eprintln!("extract failed: {e}"),
             }
             // Cutscenes from the disc's MOVIE folder, next to the music (OUTDIR/../movie).
-            let movies = std::path::Path::new(&args[3]).parent().unwrap_or(std::path::Path::new(".")).join("movie");
+            let movies = std::path::Path::new(&args[3])
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("movie");
             match crate::cdaudio::extract_dir(std::path::Path::new(&args[2]), "MOVIE", &movies) {
                 Ok(names) => println!("extracted {} cutscene files to {}", names.len(), movies.display()),
                 Err(e) => eprintln!("no cutscenes extracted: {e}"),
@@ -460,7 +468,9 @@ pub fn run_tool(args: &[String]) -> bool {
             // Dudes in clear view from each map's single-player start.
             let res = Resources::load(&args[2]).expect("load");
             for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
-                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else {
+                    continue;
+                };
                 let p = &g.player;
                 let (ex, ey, ez) = (p.x, p.y, p.z - ob_game::player::EYE_STAND);
                 for (i, s) in g.world.sprites.iter().enumerate() {
@@ -478,9 +488,28 @@ pub fn run_tool(args: &[String]) -> bool {
                         continue;
                     }
                     let tz = s.z as f64 - 0x1800 as f64;
-                    let h = ob_engine::collide::hitscan(&g.world.sectors, &g.world.walls, &[], ex, ey, ez, p.sector, dx / d, dy / d, (tz - ez) / d, d);
+                    let h = ob_engine::collide::hitscan(
+                        &g.world.sectors,
+                        &g.world.walls,
+                        &[],
+                        ex,
+                        ey,
+                        ez,
+                        p.sector,
+                        dx / d,
+                        dy / d,
+                        (tz - ez) / d,
+                        d,
+                    );
                     if h.dist >= d - 16.0 {
-                        println!("{} sprite {i} type={} dist={:.0} rel_ang={:.0} ai={:?}", e.name, s.lotag, d, rel, g.ai_state(i));
+                        println!(
+                            "{} sprite {i} type={} dist={:.0} rel_ang={:.0} ai={:?}",
+                            e.name,
+                            s.lotag,
+                            d,
+                            rel,
+                            g.ai_state(i)
+                        );
                     }
                 }
             }
@@ -492,7 +521,9 @@ pub fn run_tool(args: &[String]) -> bool {
             let radius: f64 = args[3].parse().expect("radius");
             let types: Vec<i16> = args[4..].iter().map(|t| t.parse().expect("type")).collect();
             for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
-                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else {
+                    continue;
+                };
                 let p = &g.player;
                 for (i, s) in g.world.sprites.iter().enumerate() {
                     if s.statnum == 1024 || !types.contains(&s.lotag) {
@@ -524,7 +555,10 @@ pub fn run_tool(args: &[String]) -> bool {
                 let mut g = ob_game::game::Game::load_level(&res, name).expect("map");
                 g.arsenal.give_weapon(4, 500);
                 g.arsenal.select(4);
-                let fire = ob_game::player::Input { fire: true, ..Default::default() };
+                let fire = ob_game::player::Input {
+                    fire: true,
+                    ..Default::default()
+                };
                 let idle = ob_game::player::Input::default();
                 let mut hp = g.player.health;
                 let mut hits = Vec::new();
@@ -544,16 +578,29 @@ pub fn run_tool(args: &[String]) -> bool {
             // (yellow = cultists, orange = others). Grid lines every 1024 units.
             let res = Resources::load(&args[2]).expect("load");
             let g = ob_game::game::Game::load_level(&res, &args[3]).expect("map");
-            let (cx, cy, half): (f64, f64, f64) = (args[5].parse().unwrap(), args[6].parse().unwrap(), args[7].parse().unwrap());
+            let (cx, cy, half): (f64, f64, f64) = (
+                args[5].parse().unwrap(),
+                args[6].parse().unwrap(),
+                args[7].parse().unwrap(),
+            );
             let n = 1024usize;
             let mut img = vec![0x101010u32; n * n];
-            let to = |x: f64, y: f64| (((x - cx) / half * 0.5 + 0.5) * n as f64, ((y - cy) / half * 0.5 + 0.5) * n as f64);
+            let to = |x: f64, y: f64| {
+                (
+                    ((x - cx) / half * 0.5 + 0.5) * n as f64,
+                    ((y - cy) / half * 0.5 + 0.5) * n as f64,
+                )
+            };
             let mut put = |img: &mut Vec<u32>, x: f64, y: f64, c: u32| {
                 if x >= 0.0 && y >= 0.0 && (x as usize) < n && (y as usize) < n {
                     img[y as usize * n + x as usize] = c;
                 }
             };
-            let line = |img: &mut Vec<u32>, put: &mut dyn FnMut(&mut Vec<u32>, f64, f64, u32), a: (f64, f64), b: (f64, f64), c: u32| {
+            let line = |img: &mut Vec<u32>,
+                        put: &mut dyn FnMut(&mut Vec<u32>, f64, f64, u32),
+                        a: (f64, f64),
+                        b: (f64, f64),
+                        c: u32| {
                 let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).max(1);
                 for k in 0..=steps {
                     let t = k as f64 / steps as f64;
@@ -570,13 +617,23 @@ pub fn run_tool(args: &[String]) -> bool {
             for w in g.world.walls.iter() {
                 let p2 = &g.world.walls[w.point2 as usize];
                 let c = if w.nextsector >= 0 { 0x505050 } else { 0xd04040 };
-                line(&mut img, &mut put, to(w.x as f64, w.y as f64), to(p2.x as f64, p2.y as f64), c);
+                line(
+                    &mut img,
+                    &mut put,
+                    to(w.x as f64, w.y as f64),
+                    to(p2.x as f64, p2.y as f64),
+                    c,
+                );
             }
             for (i, s) in g.world.sprites.iter().enumerate() {
                 if s.statnum == 1024 || !ob_game::dudes::is_dude(s.lotag) {
                     continue;
                 }
-                let c = if matches!(s.lotag, 201 | 202) { 0xffff00 } else { 0xff8000 };
+                let c = if matches!(s.lotag, 201 | 202) {
+                    0xffff00
+                } else {
+                    0xff8000
+                };
                 let (x, y) = to(s.x as f64, s.y as f64);
                 for dy in -3..=3 {
                     for dx in -3..=3 {
@@ -588,7 +645,13 @@ pub fn run_tool(args: &[String]) -> bool {
             let p = &g.player;
             let a = p.ang / 1024.0 * std::f64::consts::PI;
             let (x, y) = to(p.x, p.y);
-            line(&mut img, &mut put, (x, y), (x + a.cos() * 20.0, y + a.sin() * 20.0), 0x40ff40);
+            line(
+                &mut img,
+                &mut put,
+                (x, y),
+                (x + a.cos() * 20.0, y + a.sin() * 20.0),
+                0x40ff40,
+            );
             for dy in -4..=4 {
                 for dx in -4..=4 {
                     put(&mut img, x + dx as f64, y + dy as f64, 0x40ff40);
@@ -601,7 +664,9 @@ pub fn run_tool(args: &[String]) -> bool {
             // Slide sectors whose walls are kept still because moving them folds geometry.
             let res = Resources::load(&args[2]).expect("load");
             for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
-                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
+                let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else {
+                    continue;
+                };
                 let total = g.world.sectors.iter().filter(|s| matches!(s.lotag, 614 | 616)).count();
                 let f = g.triggers.frozen_slides();
                 if !f.is_empty() {
@@ -664,7 +729,12 @@ pub fn run_tool(args: &[String]) -> bool {
             for m in Upscale::ALL {
                 let mut dst = vec![0u32; 1920 * 1080];
                 crate::scale::resample(&low, 480, 270, &mut dst, 1920, 0, 0, 1920, 1080, m);
-                save_png(out.join(format!("up_{}.png", m.name())).to_str().unwrap(), 1920, 1080, &dst);
+                save_png(
+                    out.join(format!("up_{}.png", m.name())).to_str().unwrap(),
+                    1920,
+                    1080,
+                    &dst,
+                );
             }
             let big = render(960, 540);
             let mut aa = vec![0u32; 480 * 270];
@@ -742,7 +812,10 @@ pub fn run_tool(args: &[String]) -> bool {
             let data = std::fs::read(&args[2]).expect("read");
             let mut v = ob_engine::smk::Smk::parse(data).expect("smacker");
             let step: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
-            println!("{}x{} {} frames, {:.1} ms/frame", v.width, v.height, v.frames, v.frame_ms);
+            println!(
+                "{}x{} {} frames, {:.1} ms/frame",
+                v.width, v.height, v.frames, v.frame_ms
+            );
             let t0 = std::time::Instant::now();
             while v.next_frame().expect("decode") {
                 let n = v.position() - 1;
