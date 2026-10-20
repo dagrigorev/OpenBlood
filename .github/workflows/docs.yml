@@ -25,7 +25,7 @@ jobs:
     name: Build API docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux audio headers
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
@@ -96,7 +96,7 @@ jobs:
       group: wiki
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Sync wiki
         env:
