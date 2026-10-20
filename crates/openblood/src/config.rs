@@ -47,6 +47,9 @@ impl Upscale {
     }
 }
 
+/// Frame-rate limits offered in the menu (0 = unlimited).
+pub const MAX_FPS: &[u32] = &[0, 60, 120, 144, 240];
+
 /// Supersampling levels: (menu label, render size multiplier per axis).
 pub const ANTIALIAS: &[(&str, f64)] = &[("Off", 1.0), ("2x", std::f64::consts::SQRT_2), ("4x", 2.0)];
 
@@ -73,6 +76,8 @@ pub struct Config {
     pub upscale: Upscale,
     /// Index into [`ANTIALIAS`].
     pub antialias: usize,
+    /// Frame-rate cap (0 = unlimited).
+    pub max_fps: u32,
     /// Where the settings were loaded from (saved back there).
     pub ini_path: Option<PathBuf>,
 }
@@ -97,6 +102,7 @@ impl Default for Config {
             resolution: None,
             upscale: Upscale::Sharp,
             antialias: 0,
+            max_fps: 0,
             ini_path: None,
         }
     }
@@ -116,6 +122,8 @@ render_scale = 1.0
 upscale = sharp
 ; anti-aliasing (supersampling): 0 = off, 1 = 2x, 2 = 4x
 antialias = 0
+; frame-rate cap: 0 = unlimited, or e.g. 60 / 120 / 144
+max_fps = 0
 mouse_sensitivity = 0.35
 invert_mouse = 0
 always_run = 1
@@ -171,6 +179,7 @@ impl Config {
                     }
                 }
                 "antialias" => c.antialias = v.parse::<usize>().unwrap_or(0).min(ANTIALIAS.len() - 1),
+                "max_fps" => c.max_fps = v.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -209,6 +218,8 @@ render_scale = {}
 upscale = {}
 ; anti-aliasing (supersampling): 0 = off, 1 = 2x, 2 = 4x
 antialias = {}
+; frame-rate cap: 0 = unlimited, or e.g. 60 / 120 / 144
+max_fps = {}
 mouse_sensitivity = {}
 invert_mouse = {}
 always_run = {}
@@ -224,6 +235,7 @@ skill = {}
             self.render_scale,
             self.upscale.key(),
             self.antialias,
+            self.max_fps,
             self.mouse_sensitivity,
             b(self.invert_mouse),
             b(self.always_run),

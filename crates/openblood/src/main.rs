@@ -94,10 +94,14 @@ fn main() {
                 cfg.render_scale = args[i + 1].parse().unwrap_or(1.0);
                 i += 1;
             }
+            "--maxfps" if i + 1 < args.len() => {
+                cfg.max_fps = args[i + 1].parse().unwrap_or(0);
+                i += 1;
+            }
             "--windowed" => cfg.fullscreen = false,
             "--nosound" => cfg.sound = false,
             "--help" | "-h" => {
-                println!("openblood [--data DIR] [--map E1M1] [--windowed] [--scale 0.5] [--nosound]");
+                println!("openblood [--data DIR] [--map E1M1] [--windowed] [--scale 0.5] [--maxfps 60] [--nosound]");
                 println!("tools: openblood rff-list FILE | rff-extract RFF NAME OUT | map-info RFF | shot DATA MAP OUT.png [W H]");
                 return;
             }

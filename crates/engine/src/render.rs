@@ -208,6 +208,10 @@ struct View {
     horizon: f64,
     cos: f64,
     sin: f64,
+    /// Per screen row: vertical ray slope `k` (z units per unit of depth) and `1 / k`.
+    /// A flat plane's depth on a row is `height / k`, so it costs a multiply, not a divide.
+    row_k: Vec<f64>,
+    row_inv_k: Vec<f64>,
 }
 
 impl View {
@@ -253,6 +257,17 @@ pub struct Renderer {
 #[inline]
 fn shade_index(shade: i32) -> usize {
     shade.clamp(0, NUM_SHADES as i32 - 1) as usize * 256
+}
+
+/// Euclidean `v mod n`, using a mask when `n` is a power of two (almost every Build
+/// texture): an integer division per pixel was a large part of the wall/floor cost.
+#[inline(always)]
+fn wrap(v: i64, n: i64) -> i64 {
+    if n & (n - 1) == 0 {
+        v & (n - 1)
+    } else {
+        v.rem_euclid(n)
+    }
 }
 
 #[inline]
@@ -317,14 +332,20 @@ impl Renderer {
         // Hor+ field of view: a 4:3 region of the screen maps to 90 degrees.
         let fl = h as f64 * 2.0 / 3.0;
         let a = ang_to_rad(cam.ang);
+        let fly = fl * self.y_stretch;
+        let horizon = h as f64 * 0.5 - cam.horiz * h as f64 / 200.0;
+        let row_k: Vec<f64> = (0..h).map(|y| (y as f64 + 0.5 - horizon) / fly * 16.0).collect();
+        let row_inv_k = row_k.iter().map(|&k| if k.abs() < 1e-12 { 0.0 } else { 1.0 / k }).collect();
         View {
             w,
             h,
             fl,
-            fly: fl * self.y_stretch,
-            horizon: h as f64 * 0.5 - cam.horiz * h as f64 / 200.0,
+            fly,
+            horizon,
             cos: a.cos(),
             sin: a.sin(),
+            row_k,
+            row_inv_k,
         }
     }
 
@@ -358,17 +379,14 @@ impl Renderer {
             .enumerate()
             .for_each(|(x, ((((pix, depth), mask), masked), portals))| {
                 masked.clear();
-                mask.fill(0);
-                cast_column(x, scene, cam, &view, sky_scale, pix, depth, mask, masked, visited);
-                // Distinct portal ids in this column (the column is still in cache).
-                portals.clear();
-                let mut last = 0;
-                for &m in mask.iter() {
-                    if m != 0 && m != last && !portals.contains(&m) {
-                        portals.push(m);
-                    }
-                    last = m;
+                // The mask only holds marks where this column showed a portal last frame;
+                // everywhere else it is already clear (clearing the whole screen every frame
+                // was a large share of the memory traffic at high resolutions).
+                if !portals.is_empty() {
+                    mask.fill(0);
+                    portals.clear();
                 }
+                cast_column(x, scene, cam, &view, sky_scale, pix, depth, mask, portals, masked, visited);
             });
 
         let t1 = std::time::Instant::now();
@@ -526,16 +544,24 @@ fn cast_column(
     pix: &mut [u32],
     depth: &mut [f32],
     mask: &mut [u32],
+    portals: &mut Vec<u32>,
     masked: &mut Vec<MaskSeg>,
     visited: &[AtomicU8],
 ) {
     let h = view.h;
     // Marks rows drawn by a see-through plane with that portal's id.
-    let mark = |mask: &mut [u32], y0: f64, y1: f64, id: u32| {
+    // Marks rows drawn by a see-through plane with that portal's id, and records the id.
+    let mark = |mask: &mut [u32], portals: &mut Vec<u32>, y0: f64, y1: f64, id: u32| {
         let r0 = y0.max(0.0).ceil() as usize;
         let r1 = (y1.min(h as f64).ceil() as isize).max(0) as usize;
+        if r0 >= r1 {
+            return;
+        }
         for m in mask.iter_mut().take(r1).skip(r0) {
             *m = id;
+        }
+        if !portals.contains(&id) {
+            portals.push(id);
         }
     };
     let (dx, dy) = view.dir(x);
@@ -605,10 +631,10 @@ fn cast_column(
                 &fctx, scene, cam, view, sky_scale, dx, dy, x, mid, ybot, vis_s, pix, depth,
             );
             if cctx.link.is_some() {
-                mark(mask, ytop, mid, portal_id(si, false));
+                mark(mask, portals, ytop, mid, portal_id(si, false));
             }
             if fctx.link.is_some() {
-                mark(mask, mid, ybot, portal_id(si, true));
+                mark(mask, portals, mid, ybot, portal_id(si, true));
             }
             break;
         };
@@ -651,10 +677,10 @@ fn cast_column(
             depth,
         );
         if cctx.link.is_some() {
-            mark(mask, ytop, yc.min(ybot), portal_id(si, false));
+            mark(mask, portals, ytop, yc.min(ybot), portal_id(si, false));
         }
         if fctx.link.is_some() {
-            mark(mask, yf.max(ytop), ybot, portal_id(si, true));
+            mark(mask, portals, yf.max(ytop), ybot, portal_id(si, true));
         }
 
         let wall = &walls[wi];
@@ -809,7 +835,19 @@ fn draw_plane(
     let lut = scene.luts.get(p.plane.pal);
 
     if let Some(l) = p.link {
-        // Look through the plane into the linked room.
+        // Look through the plane into the linked room. Every pixel of this column travels
+        // along the same 2D line, so the sectors it crosses are found once per column.
+        let mut tmin = f64::INFINITY;
+        for y in r0..r1 {
+            let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
+            let den = k - b;
+            let t = if den.abs() > 1e-12 { (a - cam.z) / den } else { -1.0 };
+            if t > 0.0 {
+                tmin = tmin.min(t);
+            }
+        }
+        let (ox, oy, oz) = (cam.x + l.dx, cam.y + l.dy, cam.z + l.dz);
+        let mut segs = ColTrace::new(scene, l.sector, ox, oy, dx, dy, tmin);
         for y in r0..r1 {
             let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
             let den = k - b;
@@ -819,8 +857,7 @@ fn draw_plane(
                 depth[y] = f32::INFINITY;
                 continue;
             }
-            let (px, py, pz) = (cam.x + dx * t + l.dx, cam.y + dy * t + l.dy, cam.z + k * t + l.dz);
-            let (c, tt) = trace_pixel(scene, l.sector, px, py, pz, dx, dy, k, t, 3);
+            let (c, tt) = trace_column(scene, &mut segs, ox, oy, oz, dx, dy, k, t);
             pix[y] = c;
             depth[y] = tt as f32;
         }
@@ -861,37 +898,46 @@ fn draw_plane(
     };
     let xpan = p.plane.xpan as f64 * tw as f64 / 256.0;
     let ypan = p.plane.ypan as f64 * th as f64 / 256.0;
+    // Orientation flags folded into one linear map (u, v) = M (px, py), in texels.
+    let (mut m00, mut m01, mut m10, mut m11) = if stat & PLANE_RELATIVE != 0 {
+        (ux, uy, -uy, ux)
+    } else {
+        (1.0, 0.0, 0.0, 1.0)
+    };
+    if stat & PLANE_SWAPXY != 0 {
+        std::mem::swap(&mut m00, &mut m10);
+        std::mem::swap(&mut m01, &mut m11);
+    }
+    if stat & PLANE_XFLIP != 0 {
+        m00 = -m00;
+        m01 = -m01;
+    }
+    if stat & PLANE_YFLIP != 0 {
+        m10 = -m10;
+        m11 = -m11;
+    }
+    let inv_texel = 1.0 / texel;
+    let (m00, m01, m10, m11) = (m00 * inv_texel, m01 * inv_texel, m10 * inv_texel, m11 * inv_texel);
+    let k_scale = 16.0 / view.fly;
+    let height = a - cam.z;
 
+    let flat = b == 0.0;
     for y in r0..r1 {
-        let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
+        let k = if flat { view.row_k[y] } else { (y as f64 + 0.5 - view.horizon) * k_scale };
         let den = k - b;
         if den.abs() < 1e-12 {
             pix[y] = 0;
             depth[y] = f32::INFINITY;
             continue;
         }
-        let mut t = (a - cam.z) / den;
+        let mut t = if flat { height * view.row_inv_k[y] } else { height / den };
         if !(t > 0.0) {
             t = 1e9;
         }
         let px = cam.x + dx * t - ox;
         let py = cam.y + dy * t - oy;
-        let (mut u, mut v) = if stat & PLANE_RELATIVE != 0 {
-            (px * ux + py * uy, -px * uy + py * ux)
-        } else {
-            (px, py)
-        };
-        if stat & PLANE_SWAPXY != 0 {
-            std::mem::swap(&mut u, &mut v);
-        }
-        if stat & PLANE_XFLIP != 0 {
-            u = -u;
-        }
-        if stat & PLANE_YFLIP != 0 {
-            v = -v;
-        }
-        let tu = ((u / texel + xpan).floor() as i64).rem_euclid(tw);
-        let tv = ((v / texel + ypan).floor() as i64).rem_euclid(th);
+        let tu = wrap((px * m00 + py * m01 + xpan).floor() as i64, tw);
+        let tv = wrap((px * m10 + py * m11 + ypan).floor() as i64, th);
         let c = tile.pixels[(tu * th + tv) as usize];
         let sh = shade + Renderer::vis_shade(vis, t);
         pix[y] = lut[shade_index(sh) + c as usize];
@@ -983,6 +1029,168 @@ fn sample_wall(scene: &Scene, wall: &Wall, picnum: i16, xpan: u8, ypan: u8, s: f
 /// Traces one pixel's ray through sectors starting at (ox, oy, oz) in sector `s`.
 /// `dz` is z units per xy unit; `t_base` is the distance already travelled.
 #[allow(clippy::too_many_arguments)]
+/// One stretch of a column's 2D ray inside a sector (global ray parameter `t`).
+struct ColSeg {
+    sector: usize,
+    t1: f64,
+    ceil: PlaneEq,
+    floor: PlaneEq,
+    /// Wall hit at `t1` (index, position along it) and, for a portal, the next sector's
+    /// ceiling/floor heights at the hit point.
+    wall: Option<(usize, f64, Option<(f64, f64)>)>,
+}
+
+/// Sectors crossed by a column's ray `(ox, oy) + t (dx, dy)`, found lazily: only as far
+/// along as some pixel of the column actually reaches.
+struct ColTrace {
+    segs: Vec<ColSeg>,
+    /// Next sector to enter and the ray parameter where it starts (-1 = finished).
+    next: i32,
+    t_in: f64,
+    ox: f64,
+    oy: f64,
+    dx: f64,
+    dy: f64,
+}
+
+impl ColTrace {
+    fn new(scene: &Scene, start: i32, ox: f64, oy: f64, dx: f64, dy: f64, t_start: f64) -> ColTrace {
+        let (sectors, walls) = (scene.sectors, scene.walls);
+        let mut s = -1;
+        if t_start.is_finite() {
+            let (sx, sy) = (ox + dx * t_start, oy + dy * t_start);
+            s = start;
+            if s < 0 || s as usize >= sectors.len() || !crate::geom::inside_sector(sectors, walls, s as usize, sx, sy) {
+                s = crate::geom::update_sector(sectors, walls, sx, sy, s);
+            }
+        }
+        ColTrace { segs: Vec::with_capacity(8), next: s, t_in: t_start, ox, oy, dx, dy }
+    }
+
+    /// Segment `i`, computing it (and any before it) if needed.
+    fn get(&mut self, scene: &Scene, i: usize) -> Option<&ColSeg> {
+        let (sectors, walls) = (scene.sectors, scene.walls);
+        while self.segs.len() <= i {
+            if self.next < 0 || self.segs.len() >= 64 {
+                return None;
+            }
+            let si = self.next as usize;
+            let sec = &sectors[si];
+            let (ox, oy, dx, dy) = (self.ox, self.oy, self.dx, self.dy);
+            let mut best: Option<(f64, f64, usize)> = None;
+            for wi in sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize {
+                let w1 = &walls[wi];
+                let w2 = &walls[w1.point2 as usize];
+                if let Some((t, u)) = ray_segment(ox, oy, dx, dy, w1.x as f64, w1.y as f64, w2.x as f64, w2.y as f64) {
+                    if t > self.t_in + 1e-7 && best.is_none_or(|b| t < b.0) {
+                        best = Some((t, u, wi));
+                    }
+                }
+            }
+            let ceil = plane_eq(sec, walls, &sec.ceiling);
+            let floor = plane_eq(sec, walls, &sec.floor);
+            let Some((t, u, wi)) = best else {
+                self.segs.push(ColSeg { sector: si, t1: 1e9, ceil, floor, wall: None });
+                self.next = -1;
+                continue;
+            };
+            let w = &walls[wi];
+            let next = (w.nextsector >= 0)
+                .then(|| crate::geom::zs_of_slope(sectors, walls, w.nextsector as usize, ox + dx * t, oy + dy * t));
+            self.segs.push(ColSeg { sector: si, t1: t, ceil, floor, wall: Some((wi, u, next)) });
+            self.next = w.nextsector as i32;
+            self.t_in = t;
+        }
+        self.segs.get(i)
+    }
+}
+
+/// Colour and depth for one pixel's ray `(ox, oy, oz) + t (dx, dy, dz)` entering the linked
+/// room at `t_entry`, using the column's precomputed sector list. Same result as
+/// [`trace_pixel`], which still handles portals nested inside the linked room.
+#[allow(clippy::too_many_arguments)]
+fn trace_column(
+    scene: &Scene,
+    segs: &mut ColTrace,
+    ox: f64,
+    oy: f64,
+    oz: f64,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    t_entry: f64,
+) -> (u32, f64) {
+    let (sectors, walls) = (scene.sectors, scene.walls);
+    let mut t_in = t_entry;
+    let mut idx = 0;
+    while let Some(g) = segs.get(scene, idx) {
+        idx += 1;
+        if g.t1 <= t_entry + 1e-7 {
+            continue;
+        }
+        let si = g.sector;
+        let sec = &sectors[si];
+        let ror = scene.ror.get(si).copied().unwrap_or_default();
+        for (floor, eq) in [(false, &g.ceil), (true, &g.floor)] {
+            // Plane height along the ray: a + b t.
+            let a = eq.z_at(ox, oy);
+            let b = eq.bx * dx + eq.by * dy;
+            let den = dz - b;
+            if den.abs() < 1e-12 || (floor && den < 0.0) || (!floor && den > 0.0) {
+                continue;
+            }
+            let t = (a - oz) / den;
+            if t < t_in - 1e-6 || t > g.t1 {
+                continue;
+            }
+            let (hx, hy, hz) = (ox + dx * t, oy + dy * t, oz + dz * t);
+            let link = if floor { ror.floor } else { ror.ceil };
+            if let Some(l2) = link {
+                return trace_pixel(scene, l2.sector, hx + l2.dx, hy + l2.dy, hz + l2.dz, dx, dy, dz, t, 2);
+            }
+            return (sample_plane(scene, si, floor, hx, hy, t), t);
+        }
+        let Some((wi, u, next)) = g.wall else {
+            return (0, f64::INFINITY);
+        };
+        let w = &walls[wi];
+        let t = g.t1;
+        let hz = oz + dz * t;
+        match next {
+            None => {
+                let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 { sec.floor.z } else { sec.ceiling.z } as f64;
+                return (sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t), t);
+            }
+            Some((c, f)) => {
+                let ns = w.nextsector as usize;
+                if hz < c {
+                    let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 {
+                        sec.ceiling.z
+                    } else {
+                        sectors[ns].ceiling.z
+                    } as f64;
+                    return (sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t), t);
+                }
+                if hz > f {
+                    let src = if w.cstat & WALL_BOTTOM_SWAP != 0 && w.nextwall >= 0 {
+                        &walls[w.nextwall as usize]
+                    } else {
+                        w
+                    };
+                    let zref = if src.cstat & WALL_ALIGN_BOTTOM != 0 {
+                        sec.ceiling.z
+                    } else {
+                        sectors[ns].floor.z
+                    } as f64;
+                    return (sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, t), t);
+                }
+            }
+        }
+        t_in = t;
+    }
+    (0, f64::INFINITY)
+}
+
 fn trace_pixel(
     scene: &Scene,
     mut s: i32,
@@ -1145,13 +1353,28 @@ fn draw_sky(
     // Sky is a cylinder at infinity: one texel per original screen line, horizon near
     // the lower part of the sky tile.
     let px_per_texel = view.h as f64 / 200.0 * view.fly / (view.h as f64 * 0.8);
+    let texel_per_px = 1.0 / px_per_texel;
+    let k_scale = 16.0 / view.fly;
+    let lut = &lut[sh..sh + 256];
     for y in r0..r1 {
-        let v = (y as f64 + 0.5 - view.horizon) / px_per_texel + th * 0.5;
+        let dy = y as f64 + 0.5 - view.horizon;
+        let v = dy * texel_per_px + th * 0.5;
         let tv = (v.floor() as i64).clamp(0, th as i64 - 1) as usize;
-        pix[y] = lut[sh + col[tv] as usize];
-        let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
-        let den = k - b;
-        let t = if den.abs() > 1e-12 { (a - cam.z) / den } else { -1.0 };
+        pix[y] = lut[col[tv] as usize];
+        let t = if b == 0.0 {
+            if view.row_k[y].abs() > 1e-12 {
+                (a - cam.z) * view.row_inv_k[y]
+            } else {
+                -1.0
+            }
+        } else {
+            let den = dy * k_scale - b;
+            if den.abs() > 1e-12 {
+                (a - cam.z) / den
+            } else {
+                -1.0
+            }
+        };
         depth[y] = if t > 0.0 { t as f32 } else { f32::INFINITY };
     }
 }
@@ -1203,15 +1426,21 @@ fn draw_wall_span(
     let dz_per_row = 16.0 * t / view.fly;
     let yflip = wall.cstat & WALL_YFLIP != 0;
     let tf = t as f32;
+    // Texture row stepped in 32.32 fixed point: one add per pixel.
+    const ONE: f64 = 4294967296.0;
+    let z0 = cam.z + (r0 as f64 + 0.5 - view.horizon) * dz_per_row;
+    let mut vf = (((z0 - zref) * yrep + pan) * ONE) as i64;
+    let step = (dz_per_row * yrep * ONE) as i64;
+    let lut = &lut[sh..sh + 256];
     for y in r0..r1 {
-        let z = cam.z + (y as f64 + 0.5 - view.horizon) * dz_per_row;
-        let mut v = ((z - zref) * yrep + pan).floor() as i64;
+        let mut v = vf >> 32;
         if yflip {
             v = -v - 1;
         }
-        let c = col[v.rem_euclid(th) as usize];
-        pix[y] = lut[sh + c as usize];
+        let c = col[wrap(v, th) as usize];
+        pix[y] = lut[c as usize];
         depth[y] = tf;
+        vf += step;
     }
 }
 
@@ -1250,21 +1479,25 @@ fn draw_masked(x: usize, m: &MaskSeg, scene: &Scene, cam: &Camera, view: &View, 
     let trans = wall.cstat & WALL_TRANS != 0;
     let rev = wall.cstat & WALL_TRANS_REV != 0;
     let yflip = wall.cstat & WALL_YFLIP != 0;
+    let lut = &lut[sh..sh + 256];
+    // Texture row stepped in 32.32 fixed point, as for solid walls.
+    const ONE: f64 = 4294967296.0;
+    let z0 = cam.z + (r0 as f64 + 0.5 - view.horizon) * dz_per_row;
+    let mut vf = (((z0 - zref) * yrep + pan) * ONE) as i64;
+    let step = (dz_per_row * yrep * ONE) as i64;
     for y in r0..r1 {
-        if m.t >= depth[y] {
-            continue;
+        if m.t < depth[y] {
+            let mut v = vf >> 32;
+            if yflip {
+                v = -v - 1;
+            }
+            let c = col[wrap(v, th) as usize];
+            if c != TRANSPARENT {
+                let rgb = lut[c as usize];
+                pix[y] = if trans { blend(pix[y], rgb, rev) } else { rgb };
+            }
         }
-        let z = cam.z + (y as f64 + 0.5 - view.horizon) * dz_per_row;
-        let mut v = ((z - zref) * yrep + pan).floor() as i64;
-        if yflip {
-            v = -v - 1;
-        }
-        let c = col[v.rem_euclid(th) as usize];
-        if c == TRANSPARENT {
-            continue;
-        }
-        let rgb = lut[sh + c as usize];
-        pix[y] = if trans { blend(pix[y], rgb, rev) } else { rgb };
+        vf += step;
     }
 }
 
@@ -1570,21 +1803,38 @@ fn draw_sprite_column(
         let sh = shade_index(s.shade + Renderer::vis_shade(vis, t));
         let inv = th as f64 / (y1 - y0);
         let tf = t as f32;
+        let lut = &lut[sh..sh + 256];
+        // Texture row stepped in 32.32 fixed point, clamped to the tile.
+        const ONE: f64 = 4294967296.0;
+        let mut vf = (((r0 as f64 + 0.5 - y0) * inv) * ONE) as i64;
+        let step = (inv * ONE) as i64;
+        let last = th - 1;
+        let row = |vf: i64| {
+            let ty = (vf >> 32).clamp(0, last);
+            (if yflip { last - ty } else { ty }) as usize
+        };
+        if portal == 0 && !trans {
+            // Common case: opaque sprite, no portal mask.
+            for y in r0..r1 {
+                if tf < depth[y] {
+                    let c = col[row(vf)];
+                    if c != TRANSPARENT {
+                        pix[y] = lut[c as usize];
+                    }
+                }
+                vf += step;
+            }
+            return;
+        }
         for y in r0..r1 {
-            if tf >= depth[y] || !shown(y) {
-                continue;
+            if tf < depth[y] && shown(y) {
+                let c = col[row(vf)];
+                if c != TRANSPARENT {
+                    let rgb = lut[c as usize];
+                    pix[y] = if trans { blend(pix[y], rgb, rev) } else { rgb };
+                }
             }
-            let mut ty = ((y as f64 + 0.5 - y0) * inv).floor() as i64;
-            ty = ty.clamp(0, th - 1);
-            if yflip {
-                ty = th - 1 - ty;
-            }
-            let c = col[ty as usize];
-            if c == TRANSPARENT {
-                continue;
-            }
-            let rgb = lut[sh + c as usize];
-            pix[y] = if trans { blend(pix[y], rgb, rev) } else { rgb };
+            vf += step;
         }
     };
 

@@ -614,6 +614,7 @@ pub fn run_tool(args: &[String]) -> bool {
                 resolution: None,
                 upscale: crate::config::Upscale::Sharp,
                 antialias: 0,
+                max_fps: 0,
                 scale: 1.0,
                 mouse: 0.35,
                 always_run: true,

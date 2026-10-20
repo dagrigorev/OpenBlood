@@ -1,7 +1,7 @@
 //! Front-end menus drawn with the original Blood font and art tiles.
 
 use crate::hud::{tile_text, tile_text_width, vtile, Anchor};
-use crate::config::{Upscale, ANTIALIAS, RESOLUTIONS};
+use crate::config::{Upscale, ANTIALIAS, MAX_FPS, RESOLUTIONS};
 use ob_engine::render::ShadeLuts;
 use ob_game::resources::Resources;
 
@@ -49,6 +49,8 @@ pub enum MenuAction {
     SetUpscale(Upscale),
     /// Index into [`ANTIALIAS`].
     SetAntialias(usize),
+    /// Frame-rate cap (0 = unlimited).
+    SetMaxFps(u32),
     ToggleAlwaysRun,
     ToggleMusic,
     /// Save to slot 1..=5.
@@ -110,6 +112,10 @@ impl Menu {
                 format!("Render Scale: {:.0}%", opts.scale * 100.0),
                 format!("Upscale: {}", opts.upscale.name()),
                 format!("Anti-aliasing: {}", ANTIALIAS[opts.antialias.min(ANTIALIAS.len() - 1)].0),
+                match opts.max_fps {
+                    0 => "Max FPS: Unlimited".to_string(),
+                    n => format!("Max FPS: {n}"),
+                },
                 format!("Mouse Speed: {:.2}", opts.mouse),
                 format!("Always Run: {}", if opts.always_run { "On" } else { "Off" }),
                 format!("Music: {}", if opts.music { "On" } else { "Off" }),
@@ -161,7 +167,8 @@ impl Menu {
             2 => MenuAction::ScaleChanged((opts.scale + 0.25 * dir as f64).clamp(0.25, 1.0)),
             3 => MenuAction::SetUpscale(step(&Upscale::ALL, opts.upscale, dir)),
             4 => MenuAction::SetAntialias((opts.antialias as i32 + dir).clamp(0, ANTIALIAS.len() as i32 - 1) as usize),
-            5 => MenuAction::MouseSensitivity((opts.mouse + 0.05 * dir as f64).clamp(0.05, 3.0)),
+            5 => MenuAction::SetMaxFps(step(MAX_FPS, opts.max_fps, dir)),
+            6 => MenuAction::MouseSensitivity((opts.mouse + 0.05 * dir as f64).clamp(0.05, 3.0)),
             _ => self.select(opts),
         }
     }
@@ -210,8 +217,9 @@ impl Menu {
             (Screen::Options, 2) => MenuAction::ScaleChanged(if opts.scale >= 1.0 { 0.5 } else { 1.0 }),
             (Screen::Options, 3) => MenuAction::SetUpscale(step(&Upscale::ALL, opts.upscale, 1)),
             (Screen::Options, 4) => MenuAction::SetAntialias((opts.antialias + 1) % ANTIALIAS.len()),
-            (Screen::Options, 6) => MenuAction::ToggleAlwaysRun,
-            (Screen::Options, 7) => MenuAction::ToggleMusic,
+            (Screen::Options, 5) => MenuAction::SetMaxFps(step(MAX_FPS, opts.max_fps, 1)),
+            (Screen::Options, 7) => MenuAction::ToggleAlwaysRun,
+            (Screen::Options, 8) => MenuAction::ToggleMusic,
             (Screen::Help, _) | (Screen::Credits, _) => {
                 self.back();
                 MenuAction::None
@@ -350,6 +358,7 @@ impl Menu {
         let items = self.items(res, opts);
         let top = match self.screen {
             Screen::Main => 110.0,
+            _ if items.len() > 8 => 43.0,
             _ if items.len() > 6 => 46.0,
             _ => 55.0,
         };
@@ -373,6 +382,7 @@ impl Menu {
         }
         // Long lists (options) use a smaller font so they fit above the artwork.
         let (spacing, zoom) = match items.len() {
+            n if n > 8 => (11.5, 0.7),
             n if n > 6 => (13.0, 0.78),
             n if n > 5 => (16.0, 1.0),
             _ => (18.0, 1.0),
@@ -423,6 +433,7 @@ pub struct OptionsView {
     pub resolution: Option<(u32, u32)>,
     pub upscale: Upscale,
     pub antialias: usize,
+    pub max_fps: u32,
     pub scale: f64,
     pub mouse: f64,
     pub always_run: bool,
@@ -459,6 +470,7 @@ mod tests {
             resolution: None,
             upscale: Upscale::Sharp,
             antialias: 0,
+            max_fps: 0,
             scale: 1.0,
             mouse: 0.35,
             always_run: true,

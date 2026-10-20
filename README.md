@@ -22,7 +22,11 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
   the camera and all sprites between the last two ticks, so 60, 144 Hz or uncapped frame
   rates all move evenly.
 - Video options: output resolution (native by default), render scale, upscale filter
-  (Nearest / Smooth / Sharp) and supersampling anti-aliasing (2x / 4x).
+  (Nearest / Smooth / Sharp), supersampling anti-aliasing (2x / 4x) and a frame-rate cap.
+- Level starts don't stall: all sound effects are preloaded once (~26 MB, ~10 ms), CD music
+  is streamed from disk in small chunks instead of loading whole tracks, and the HUD is drawn
+  at window resolution after scaling. Anti-aliasing 4x at native 4K costs about four times
+  the rendering; lower it (or Render Scale) if the frame rate is too low.
 - Voxel models (KVX) for items and decorations, ray-cast per pixel, including spinning pickups.
 - Room-over-room links: see-through stacked floors/ceilings (per-pixel portal tracing) and
   moving between linked rooms, including diving into water (with the original water palette),
@@ -81,7 +85,7 @@ original in some views (most visible in the E1M1 starting coffin); this is being
    `openblood extract-cd BLOODCD1.cue music`
 4. Run `openblood.exe` (fullscreen at native resolution by default).
 
-Command line: `--windowed`, `--map E1M1`, `--data <dir>`, `--scale 0.5`, `--nosound`.
+Command line: `--windowed`, `--map E1M1`, `--data <dir>`, `--scale 0.5`, `--maxfps 60`, `--nosound`.
 
 **Tip for E1M1:** you start lying in a coffin. Move once (the coffin floor rises), then jump
 (Space) while walking forward to climb over its edge into the crypt.
@@ -118,6 +122,7 @@ Everything changed in the Options menu is saved to `openblood.ini` next to the e
 | Render Scale | `render_scale` | 0.25 – 1.0 (lower = faster, blurrier) |
 | Upscale | `upscale` | `nearest` (blocky), `smooth` (bilinear), `sharp` (crisp pixels, clean edges; default) |
 | Anti-aliasing | `antialias` | 0 = off, 1 = 2x, 2 = 4x supersampling (4x costs about four times the rendering) |
+| Max FPS | `max_fps` | 0 = unlimited, 60 / 120 / 144 / 240 � caps the frame rate with even frame pacing, saving CPU power and heat; motion stays smooth |
 | Mouse Speed | `mouse_sensitivity` | 0.05 – 3.0 |
 | Always Run | `always_run` | 0 / 1 |
 | Music | `music` | 0 / 1 |
@@ -173,6 +178,10 @@ Developer tools (`openblood <tool> ...`):
 - Rendering: `shot` / `shotg` (render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera
   at a sprite, `OB_CAM=x,y,z,ang` places it, `OB_ACT=1` starts the level, `YSTRETCH=` overrides
   the vertical scale), `menu-shot` (options screen), `scale-test` (upscale filters and AA).
+- Performance: `perf DATA MAP [W H]` (simulation and per-phase render times for the first
+  seconds; `OB_SECS=n` for longer runs). In the game, `OB_PROFILE=1` logs every frame slower
+  than 12 ms with a per-stage breakdown to `openblood-profile.log`, and `OB_AUTOSWITCH=n`
+  moves to the next level every n seconds.
 - Analysis: `dude-visible` / `dude-near` (enemies near map starts), `noise-test` (who answers
   gunfire), `topdown` (top-down map image), `frozen-slides` (slide sectors kept still).
 

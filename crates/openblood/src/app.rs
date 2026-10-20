@@ -48,6 +48,8 @@ pub struct App {
     out: Vec<u32>,
     /// F12 pressed: save the next presented frame.
     shot_pending: bool,
+    /// When the next capped frame may start.
+    pace_next: Option<Instant>,
     prof_log: Vec<String>,
     last_switch: Instant,
     message: Option<(String, Instant)>,
@@ -95,6 +97,7 @@ impl App {
             start_time: Instant::now(),
             out: Vec::new(),
             shot_pending: false,
+            pace_next: None,
             prof_log: Vec::new(),
             last_switch: Instant::now(),
             message: None,
@@ -235,6 +238,7 @@ impl App {
             resolution: self.cfg.resolution,
             upscale: self.cfg.upscale,
             antialias: self.cfg.antialias,
+            max_fps: self.cfg.max_fps,
             scale: self.cfg.render_scale,
             mouse: self.cfg.mouse_sensitivity,
             always_run: self.cfg.always_run,
@@ -324,6 +328,7 @@ impl App {
                 | MenuAction::SetResolution(_)
                 | MenuAction::SetUpscale(_)
                 | MenuAction::SetAntialias(_)
+                | MenuAction::SetMaxFps(_)
                 | MenuAction::MouseSensitivity(_)
                 | MenuAction::ToggleAlwaysRun
                 | MenuAction::ToggleMusic
@@ -357,6 +362,10 @@ impl App {
             MenuAction::SetResolution(r) => self.cfg.resolution = r,
             MenuAction::SetUpscale(u) => self.cfg.upscale = u,
             MenuAction::SetAntialias(a) => self.cfg.antialias = a,
+            MenuAction::SetMaxFps(f) => {
+                self.cfg.max_fps = f;
+                self.pace_next = None;
+            }
             MenuAction::MouseSensitivity(v) => self.cfg.mouse_sensitivity = v,
             MenuAction::ToggleAlwaysRun => self.cfg.always_run = !self.cfg.always_run,
             MenuAction::ToggleMusic => {
@@ -516,6 +525,7 @@ impl App {
 
         let _ = buf.present();
         prof.mark("present");
+        self.pace_frame();
         prof.finish(&self.game.world.map_name, self.game.clock, self.start_time.elapsed().as_secs_f64(), &mut self.prof_log);
         // Profiling aid: OB_AUTOSWITCH=N switches to the next level every N seconds.
         if let Some(n) = std::env::var("OB_AUTOSWITCH").ok().and_then(|v| v.parse::<f64>().ok()) {
@@ -535,6 +545,33 @@ impl App {
                 "OpenBlood - {} - {}x{} - {:.0} fps",
                 self.game.world.map_name, rw, rh, self.fps
             ));
+        }
+    }
+
+    /// Frame-rate cap: waits until this frame's slot ends. Sleeps most of the way (Rust's
+    /// sleep uses a high-resolution timer on Windows) and spins the last moment for
+    /// even frame spacing. Motion stays smooth through the tick interpolation.
+    fn pace_frame(&mut self) {
+        if self.cfg.max_fps == 0 {
+            return;
+        }
+        let period = std::time::Duration::from_secs_f64(1.0 / self.cfg.max_fps as f64);
+        let now = Instant::now();
+        // Next slot; if we fell behind by more than a frame, start counting from now.
+        let target = match self.pace_next {
+            Some(t) if t + period > now => t,
+            _ => now,
+        };
+        self.pace_next = Some(target + period);
+        if target > now {
+            let wait = target - now;
+            let margin = std::time::Duration::from_micros(1500);
+            if wait > margin {
+                std::thread::sleep(wait - margin);
+            }
+            while Instant::now() < target {
+                std::hint::spin_loop();
+            }
         }
     }
 
