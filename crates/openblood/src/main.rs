@@ -7,6 +7,7 @@ mod cdaudio;
 mod config;
 mod hud;
 mod menu;
+mod scale;
 mod tools;
 
 use config::Config;

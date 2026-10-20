@@ -611,6 +611,9 @@ pub fn run_tool(args: &[String]) -> bool {
             m.screen = crate::menu::Screen::Options;
             let o = crate::menu::OptionsView {
                 fullscreen: false,
+                resolution: Some((1920, 1080)),
+                upscale: crate::config::Upscale::Sharp,
+                antialias: 1,
                 scale: 0.5,
                 mouse: 0.35,
                 always_run: true,
@@ -621,6 +624,46 @@ pub fn run_tool(args: &[String]) -> bool {
             let mut frame = vec![0u32; w * h];
             m.draw(&mut frame, w, h, &res, &luts, 0.0, &o);
             save_png(&args[3], w, h, &frame);
+        }
+        Some("scale-test") => {
+            // openblood scale-test DATA MAP OUTDIR : one view scaled with each Upscale mode,
+            // and anti-aliasing off vs 4x, for eyeballing.
+            use crate::config::Upscale;
+            let res = Resources::load(&args[2]).expect("load");
+            let g = ob_game::game::Game::load_level(&res, &args[3]).expect("level");
+            let out = std::path::Path::new(&args[4]);
+            let luts = res.build_luts(0);
+            let cam = g.camera();
+            let render = |w: usize, h: usize| {
+                let sprites = g.sprite_draws(&res, &cam);
+                let scene = Scene {
+                    sectors: &g.world.sectors,
+                    walls: &g.world.walls,
+                    sprites: &sprites,
+                    tiles: &res.tiles,
+                    luts: &luts,
+                    sky_offsets: &g.world.sky_offsets,
+                    sky_bits: g.world.sky_bits,
+                    visibility: g.world.visibility,
+                    clock: 0,
+                    voxels: &res.voxels,
+                    ror: &g.world.ror_view,
+                };
+                let mut r = Renderer::new(w, h);
+                r.render(&scene, &cam);
+                r.frame.clone()
+            };
+            let low = render(480, 270);
+            for m in Upscale::ALL {
+                let mut dst = vec![0u32; 1920 * 1080];
+                crate::scale::resample(&low, 480, 270, &mut dst, 1920, 0, 0, 1920, 1080, m);
+                save_png(out.join(format!("up_{}.png", m.name())).to_str().unwrap(), 1920, 1080, &dst);
+            }
+            let big = render(960, 540);
+            let mut aa = vec![0u32; 480 * 270];
+            crate::scale::resample(&big, 960, 540, &mut aa, 480, 0, 0, 480, 270, Upscale::Sharp);
+            save_png(out.join("aa_off.png").to_str().unwrap(), 480, 270, &low);
+            save_png(out.join("aa_4x.png").to_str().unwrap(), 480, 270, &aa);
         }
         Some("vox-test") => {
             // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).

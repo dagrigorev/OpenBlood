@@ -218,6 +218,9 @@ impl App {
     fn options_view(&self) -> crate::menu::OptionsView {
         crate::menu::OptionsView {
             fullscreen: self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()),
+            resolution: self.cfg.resolution,
+            upscale: self.cfg.upscale,
+            antialias: self.cfg.antialias,
             scale: self.cfg.render_scale,
             mouse: self.cfg.mouse_sensitivity,
             always_run: self.cfg.always_run,
@@ -300,6 +303,17 @@ impl App {
                 a.play(&self.res, 778, None, false, (1.0, 2.0), -1);
             }
         }
+        let persist = matches!(
+            action,
+            MenuAction::ToggleFullscreen
+                | MenuAction::ScaleChanged(_)
+                | MenuAction::SetResolution(_)
+                | MenuAction::SetUpscale(_)
+                | MenuAction::SetAntialias(_)
+                | MenuAction::MouseSensitivity(_)
+                | MenuAction::ToggleAlwaysRun
+                | MenuAction::ToggleMusic
+        );
         match action {
             MenuAction::None => {}
             MenuAction::Quit => el.exit(),
@@ -326,6 +340,9 @@ impl App {
             }
             MenuAction::ToggleFullscreen => self.toggle_fullscreen(),
             MenuAction::ScaleChanged(v) => self.cfg.render_scale = v,
+            MenuAction::SetResolution(r) => self.cfg.resolution = r,
+            MenuAction::SetUpscale(u) => self.cfg.upscale = u,
+            MenuAction::SetAntialias(a) => self.cfg.antialias = a,
             MenuAction::MouseSensitivity(v) => self.cfg.mouse_sensitivity = v,
             MenuAction::ToggleAlwaysRun => self.cfg.always_run = !self.cfg.always_run,
             MenuAction::ToggleMusic => {
@@ -340,6 +357,11 @@ impl App {
                         },
                     );
                 }
+            }
+        }
+        if persist {
+            if let Err(e) = self.cfg.save() {
+                eprintln!("could not save openblood.ini: {e}");
             }
         }
     }
@@ -380,9 +402,14 @@ impl App {
         let Some(window) = self.window.clone() else { return };
         let size = window.inner_size();
         let (ww, wh) = (size.width.max(1) as usize, size.height.max(1) as usize);
-        let scale = self.cfg.render_scale.clamp(0.1, 1.0);
-        let rw = ((ww as f64 * scale) as usize).max(64);
-        let rh = ((wh as f64 * scale) as usize).max(48);
+        // Image size: chosen resolution (or the window's), times render scale, times the
+        // supersampling factor; it is averaged/scaled into a letterboxed window rectangle.
+        let (bw, bh) = self.cfg.resolution.map_or((ww, wh), |(w, h)| (w as usize, h as usize));
+        let (ox, oy, dw, dh) = crate::scale::fit(ww, wh, bw, bh);
+        let ss = crate::config::ANTIALIAS[self.cfg.antialias.min(crate::config::ANTIALIAS.len() - 1)].1;
+        let scale = self.cfg.render_scale.clamp(0.1, 1.0) * ss;
+        let rw = ((bw as f64 * scale) as usize).max(64);
+        let rh = ((bh as f64 * scale) as usize).max(48);
         self.renderer.resize(rw, rh);
 
         let cam = self.game.camera();
@@ -440,21 +467,10 @@ impl App {
             return;
         }
         let Ok(mut buf) = surface.buffer_mut() else { return };
-        if rw == ww && rh == wh {
-            buf.copy_from_slice(&self.renderer.frame);
-        } else {
-            // Nearest-neighbour upscale from the render resolution.
-            let src = &self.renderer.frame;
-            use rayon::prelude::*;
-            let xmap: Vec<usize> = (0..ww).map(|x| (x * rw / ww).min(rw - 1)).collect();
-            buf.par_chunks_mut(ww).enumerate().for_each(|(y, out)| {
-                let sy = (y * rh / wh).min(rh - 1);
-                let row = &src[sy * rw..sy * rw + rw];
-                for (o, &sx) in out.iter_mut().zip(xmap.iter()) {
-                    *o = row[sx];
-                }
-            });
+        if (dw, dh) != (ww, wh) {
+            buf.fill(0);
         }
+        crate::scale::resample(&self.renderer.frame, rw, rh, &mut buf, ww, ox, oy, dw, dh, self.cfg.upscale);
         let _ = buf.present();
 
         self.fps_frames += 1;
@@ -474,8 +490,10 @@ impl App {
         if let Some(w) = &self.window {
             if w.fullscreen().is_some() {
                 w.set_fullscreen(None);
+                self.cfg.fullscreen = false;
             } else {
                 w.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                self.cfg.fullscreen = true;
             }
         }
     }

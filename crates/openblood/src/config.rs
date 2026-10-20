@@ -2,6 +2,54 @@
 
 use std::path::{Path, PathBuf};
 
+/// Selectable output resolutions (besides "native" = the window's own size).
+pub const RESOLUTIONS: &[(u32, u32)] = &[
+    (640, 480),
+    (800, 600),
+    (1024, 768),
+    (1280, 720),
+    (1280, 1024),
+    (1600, 900),
+    (1920, 1080),
+    (1920, 1200),
+    (2560, 1080),
+    (2560, 1440),
+    (3440, 1440),
+    (3840, 2160),
+];
+
+/// How the rendered image is scaled to the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Upscale {
+    /// Blocky pixels (classic look).
+    Nearest,
+    /// Bilinear filtering.
+    Smooth,
+    /// Crisp pixels with smoothed edges between them (no uneven pixel sizes).
+    Sharp,
+}
+
+impl Upscale {
+    pub const ALL: [Upscale; 3] = [Upscale::Nearest, Upscale::Smooth, Upscale::Sharp];
+    pub fn name(self) -> &'static str {
+        match self {
+            Upscale::Nearest => "Nearest",
+            Upscale::Smooth => "Smooth",
+            Upscale::Sharp => "Sharp",
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            Upscale::Nearest => "nearest",
+            Upscale::Smooth => "smooth",
+            Upscale::Sharp => "sharp",
+        }
+    }
+}
+
+/// Supersampling levels: (menu label, render size multiplier per axis).
+pub const ANTIALIAS: &[(&str, f64)] = &[("Off", 1.0), ("2x", std::f64::consts::SQRT_2), ("4x", 2.0)];
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Directory holding the original game files (BLOOD.RFF, TILES*.ART, ...).
@@ -20,6 +68,13 @@ pub struct Config {
     pub music_volume: f64,
     pub start_map: Option<String>,
     pub skill: i32,
+    /// Output resolution; None = native (window size).
+    pub resolution: Option<(u32, u32)>,
+    pub upscale: Upscale,
+    /// Index into [`ANTIALIAS`].
+    pub antialias: usize,
+    /// Where the settings were loaded from (saved back there).
+    pub ini_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -39,6 +94,10 @@ impl Default for Config {
             music_volume: 0.6,
             start_map: None,
             skill: 2,
+            resolution: None,
+            upscale: Upscale::Sharp,
+            antialias: 0,
+            ini_path: None,
         }
     }
 }
@@ -49,8 +108,14 @@ data_dir = .
 fullscreen = 1
 window_width = 1600
 window_height = 900
-; 1.0 renders at native resolution (e.g. 3840x2160); lower values trade sharpness for speed
+; native, or a size like 1920x1080 (the image is fitted to the window)
+resolution = native
+; 1.0 renders at the full resolution; lower values trade sharpness for speed
 render_scale = 1.0
+; nearest, smooth or sharp: how the image is scaled to the window
+upscale = sharp
+; anti-aliasing (supersampling): 0 = off, 1 = 2x, 2 = 4x
+antialias = 0
 mouse_sensitivity = 0.35
 invert_mouse = 0
 always_run = 1
@@ -68,7 +133,10 @@ fn truthy(v: &str) -> bool {
 
 impl Config {
     pub fn load(path: &Path) -> Config {
-        let mut c = Config::default();
+        let mut c = Config {
+            ini_path: Some(path.to_path_buf()),
+            ..Config::default()
+        };
         let Ok(text) = std::fs::read_to_string(path) else {
             let _ = std::fs::write(path, DEFAULT_INI);
             return c;
@@ -96,10 +164,82 @@ impl Config {
                 "music_volume" => c.music_volume = v.parse().unwrap_or(c.music_volume),
                 "start_map" => c.start_map = Some(v.to_string()),
                 "skill" => c.skill = v.parse().unwrap_or(c.skill),
+                "resolution" => c.resolution = parse_resolution(v),
+                "upscale" => {
+                    if let Some(u) = Upscale::ALL.iter().find(|u| u.key() == v.to_ascii_lowercase()) {
+                        c.upscale = *u;
+                    }
+                }
+                "antialias" => c.antialias = v.parse::<usize>().unwrap_or(0).min(ANTIALIAS.len() - 1),
                 _ => {}
             }
         }
         c
+    }
+}
+
+fn parse_resolution(v: &str) -> Option<(u32, u32)> {
+    let (w, h) = v.to_ascii_lowercase().split_once('x').map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))?;
+    let (w, h) = (w.parse().ok()?, h.parse().ok()?);
+    (w >= 320 && h >= 200).then_some((w, h))
+}
+
+impl Config {
+    /// Writes the settings back to the ini file they were loaded from.
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(path) = &self.ini_path else { return Ok(()) };
+        let b = |v: bool| if v { 1 } else { 0 };
+        let res = match self.resolution {
+            Some((w, h)) => format!("{w}x{h}"),
+            None => "native".into(),
+        };
+        let data_dir = self.data_dir.to_string_lossy();
+        let mut out = format!(
+            "; OpenBlood configuration
+; Path to your ORIGINAL Blood installation (folder with BLOOD.RFF, SOUNDS.RFF, TILES*.ART)
+data_dir = {data_dir}
+fullscreen = {}
+window_width = {}
+window_height = {}
+; native, or a size like 1920x1080 (the image is fitted to the window)
+resolution = {res}
+; 1.0 renders at the full resolution; lower values trade sharpness for speed
+render_scale = {}
+; nearest, smooth or sharp: how the image is scaled to the window
+upscale = {}
+; anti-aliasing (supersampling): 0 = off, 1 = 2x, 2 = 4x
+antialias = {}
+mouse_sensitivity = {}
+invert_mouse = {}
+always_run = {}
+sound = {}
+music = {}
+volume = {}
+music_volume = {}
+skill = {}
+",
+            b(self.fullscreen),
+            self.window_width,
+            self.window_height,
+            self.render_scale,
+            self.upscale.key(),
+            self.antialias,
+            self.mouse_sensitivity,
+            b(self.invert_mouse),
+            b(self.always_run),
+            b(self.sound),
+            b(self.music),
+            self.volume,
+            self.music_volume,
+            self.skill,
+        );
+        match &self.start_map {
+            Some(m) => out.push_str(&format!("start_map = {m}
+")),
+            None => out.push_str("; start_map = E1M1
+"),
+        }
+        std::fs::write(path, out)
     }
 }
 
@@ -117,5 +257,28 @@ mod tests {
         assert!(!c.fullscreen);
         assert_eq!(c.render_scale, 0.5);
         assert_eq!(c.start_map.as_deref(), Some("E2M1"));
+        assert_eq!(c.resolution, None);
+    }
+
+    #[test]
+    fn video_settings_round_trip() {
+        let dir = std::env::temp_dir().join(format!("ob_cfg_rt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("openblood.ini");
+        std::fs::write(&p, "resolution = 1920x1080
+upscale = smooth
+antialias = 2
+").unwrap();
+        let mut c = Config::load(&p);
+        assert_eq!(c.resolution, Some((1920, 1080)));
+        assert_eq!(c.upscale, Upscale::Smooth);
+        assert_eq!(c.antialias, 2);
+        c.resolution = None;
+        c.upscale = Upscale::Nearest;
+        c.save().unwrap();
+        let c2 = Config::load(&p);
+        assert_eq!(c2.resolution, None);
+        assert_eq!(c2.upscale, Upscale::Nearest);
+        assert_eq!(c2.antialias, 2);
     }
 }

@@ -1,6 +1,7 @@
 //! Front-end menus drawn with the original Blood font and art tiles.
 
 use crate::hud::{tile_text, tile_text_width, vtile, Anchor};
+use crate::config::{Upscale, ANTIALIAS, RESOLUTIONS};
 use ob_engine::render::ShadeLuts;
 use ob_game::resources::Resources;
 
@@ -43,6 +44,11 @@ pub enum MenuAction {
     ToggleFullscreen,
     ScaleChanged(f64),
     MouseSensitivity(f64),
+    /// Output resolution (None = native).
+    SetResolution(Option<(u32, u32)>),
+    SetUpscale(Upscale),
+    /// Index into [`ANTIALIAS`].
+    SetAntialias(usize),
     ToggleAlwaysRun,
     ToggleMusic,
     /// Save to slot 1..=5.
@@ -97,7 +103,13 @@ impl Menu {
             Screen::Skill => SKILLS.iter().map(|s| s.to_string()).collect(),
             Screen::Options => vec![
                 format!("Fullscreen: {}", if opts.fullscreen { "On" } else { "Off" }),
+                match opts.resolution {
+                    Some((w, h)) => format!("Resolution: {w}x{h}"),
+                    None => "Resolution: Native".to_string(),
+                },
                 format!("Render Scale: {:.0}%", opts.scale * 100.0),
+                format!("Upscale: {}", opts.upscale.name()),
+                format!("Anti-aliasing: {}", ANTIALIAS[opts.antialias.min(ANTIALIAS.len() - 1)].0),
                 format!("Mouse Speed: {:.2}", opts.mouse),
                 format!("Always Run: {}", if opts.always_run { "On" } else { "Off" }),
                 format!("Music: {}", if opts.music { "On" } else { "Off" }),
@@ -145,8 +157,11 @@ impl Menu {
             return MenuAction::None;
         }
         match self.cursor {
-            1 => MenuAction::ScaleChanged((opts.scale + 0.25 * dir as f64).clamp(0.25, 1.0)),
-            2 => MenuAction::MouseSensitivity((opts.mouse + 0.05 * dir as f64).clamp(0.05, 3.0)),
+            1 => MenuAction::SetResolution(step_resolution(opts.resolution, dir)),
+            2 => MenuAction::ScaleChanged((opts.scale + 0.25 * dir as f64).clamp(0.25, 1.0)),
+            3 => MenuAction::SetUpscale(step(&Upscale::ALL, opts.upscale, dir)),
+            4 => MenuAction::SetAntialias((opts.antialias as i32 + dir).clamp(0, ANTIALIAS.len() as i32 - 1) as usize),
+            5 => MenuAction::MouseSensitivity((opts.mouse + 0.05 * dir as f64).clamp(0.05, 3.0)),
             _ => self.select(opts),
         }
     }
@@ -191,9 +206,12 @@ impl Menu {
                 skill: s as i32,
             },
             (Screen::Options, 0) => MenuAction::ToggleFullscreen,
-            (Screen::Options, 1) => MenuAction::ScaleChanged(if opts.scale >= 1.0 { 0.5 } else { 1.0 }),
-            (Screen::Options, 3) => MenuAction::ToggleAlwaysRun,
-            (Screen::Options, 4) => MenuAction::ToggleMusic,
+            (Screen::Options, 1) => MenuAction::SetResolution(step_resolution(opts.resolution, 1)),
+            (Screen::Options, 2) => MenuAction::ScaleChanged(if opts.scale >= 1.0 { 0.5 } else { 1.0 }),
+            (Screen::Options, 3) => MenuAction::SetUpscale(step(&Upscale::ALL, opts.upscale, 1)),
+            (Screen::Options, 4) => MenuAction::SetAntialias((opts.antialias + 1) % ANTIALIAS.len()),
+            (Screen::Options, 6) => MenuAction::ToggleAlwaysRun,
+            (Screen::Options, 7) => MenuAction::ToggleMusic,
             (Screen::Help, _) | (Screen::Credits, _) => {
                 self.back();
                 MenuAction::None
@@ -330,7 +348,11 @@ impl Menu {
             _ => "",
         };
         let items = self.items(res, opts);
-        let top = if self.screen == Screen::Main { 110.0 } else { 55.0 };
+        let top = match self.screen {
+            Screen::Main => 110.0,
+            _ if items.len() > 6 => 46.0,
+            _ => 55.0,
+        };
         if !title.is_empty() {
             let tw = tile_text_width(res, MENU_FONT, title, 1.0);
             tile_text(
@@ -349,9 +371,14 @@ impl Menu {
                 2,
             );
         }
-        let spacing = if items.len() > 5 { 16.0 } else { 18.0 };
+        // Long lists (options) use a smaller font so they fit above the artwork.
+        let (spacing, zoom) = match items.len() {
+            n if n > 6 => (13.0, 0.78),
+            n if n > 5 => (16.0, 1.0),
+            _ => (18.0, 1.0),
+        };
         for (i, it) in items.iter().enumerate() {
-            let tw = tile_text_width(res, MENU_FONT, it, 1.0);
+            let tw = tile_text_width(res, MENU_FONT, it, zoom);
             let sel = i == self.cursor;
             // Selected entry pulses, like the original menu highlight.
             let shade = if sel {
@@ -370,7 +397,7 @@ impl Menu {
                 160.0 - tw / 2.0,
                 top + i as f64 * spacing,
                 Anchor::Center,
-                1.0,
+                zoom,
                 shade,
                 0,
             );
@@ -393,12 +420,27 @@ pub const SAVE_SLOTS: usize = 5;
 /// Current option values shown in the options menu.
 pub struct OptionsView {
     pub fullscreen: bool,
+    pub resolution: Option<(u32, u32)>,
+    pub upscale: Upscale,
+    pub antialias: usize,
     pub scale: f64,
     pub mouse: f64,
     pub always_run: bool,
     pub music: bool,
     /// Titles of save slots 1..=5 (None = empty).
     pub slots: Vec<Option<String>>,
+}
+
+/// Next value in `all` after `cur` in direction `dir`, wrapping around.
+fn step<T: Copy + PartialEq>(all: &[T], cur: T, dir: i32) -> T {
+    let i = all.iter().position(|&v| v == cur).unwrap_or(0) as i32;
+    all[(i + dir).rem_euclid(all.len() as i32) as usize]
+}
+
+/// Cycles Native -> listed resolutions -> Native.
+fn step_resolution(cur: Option<(u32, u32)>, dir: i32) -> Option<(u32, u32)> {
+    let all: Vec<Option<(u32, u32)>> = std::iter::once(None).chain(RESOLUTIONS.iter().map(|&r| Some(r))).collect();
+    step(&all, cur, dir)
 }
 
 impl Default for Menu {
@@ -414,6 +456,9 @@ mod tests {
     fn opts() -> OptionsView {
         OptionsView {
             fullscreen: true,
+            resolution: None,
+            upscale: Upscale::Sharp,
+            antialias: 0,
             scale: 1.0,
             mouse: 0.35,
             always_run: true,
