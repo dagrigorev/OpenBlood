@@ -111,6 +111,11 @@ jobs:
           name="openblood-${TAG}-${{ matrix.name }}"
           mkdir -p "dist/${name}"
           cp "target/release/${{ matrix.bin }}" README.md LICENSE-MIT "dist/${name}/"
+          # Release builds keep debug info (profile.release debug = 1). Windows puts it in a
+          # separate .pdb that is not packaged; on Linux it is inside the binary, so strip it.
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            strip "dist/${name}/${{ matrix.bin }}"
+          fi
           cd dist
           if [ "${RUNNER_OS}" = "Windows" ]; then
             7z a -tzip "${name}.zip" "${name}" > /dev/null
