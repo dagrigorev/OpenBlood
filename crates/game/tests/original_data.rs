@@ -281,7 +281,8 @@ fn point_blank_shotgun_gibs_axe_zombie() {
         (0..g.world.sprites.len()).find(|&i| {
             let s = &g.world.sprites[i];
             s.lotag == 203
-                && g.ai_state(i).is_some_and(|a| !matches!(a, ob_game::game::Ai::Dead | ob_game::game::Ai::Dying))
+                && g.ai_state(i)
+                    .is_some_and(|a| !matches!(a, ob_game::game::Ai::Dead | ob_game::game::Ai::Dying))
                 && (s.x as f64 - g.player.x).hypot(s.y as f64 - g.player.y) < 600.0
         })
     };
@@ -384,7 +385,10 @@ fn e1m1_player_can_climb_out_of_coffin() {
     for t in 0..90 {
         g.update(&r, &out, 1.0 / 60.0);
         if t % 10 == 0 {
-            eprintln!("t{t} ({:.0},{:.0},{:.0}) sect {}", g.player.x, g.player.y, g.player.z, g.player.sector);
+            eprintln!(
+                "t{t} ({:.0},{:.0},{:.0}) sect {}",
+                g.player.x, g.player.y, g.player.z, g.player.sector
+            );
         }
     }
     for _ in 0..60 {
@@ -411,11 +415,13 @@ fn idle_dudes_wander_near_home() {
     let far: Vec<usize> = (0..g.world.sprites.len())
         .filter(|&i| {
             let s = &g.world.sprites[i];
-            matches!(s.lotag, 201 | 202)
-                && (s.x as f64 - g.player.x).hypot(s.y as f64 - g.player.y) > 20000.0
+            matches!(s.lotag, 201 | 202) && (s.x as f64 - g.player.x).hypot(s.y as f64 - g.player.y) > 20000.0
         })
         .collect();
-    let start: Vec<(i32, i32)> = far.iter().map(|&i| (g.world.sprites[i].x, g.world.sprites[i].y)).collect();
+    let start: Vec<(i32, i32)> = far
+        .iter()
+        .map(|&i| (g.world.sprites[i].x, g.world.sprites[i].y))
+        .collect();
     for _ in 0..60 * 6 {
         g.update(&r, &idle, 1.0 / 60.0);
     }
@@ -461,16 +467,22 @@ fn camera_moves_smoothly_between_ticks() {
     let mean = steps.iter().sum::<f64>() / steps.len() as f64;
     assert!(mean > 10.0, "player should be walking: {mean}");
     for s in &steps {
-        assert!((s - mean).abs() < mean * 0.25, "uneven camera step {s:.1} vs mean {mean:.1}: {steps:?}");
+        assert!(
+            (s - mean).abs() < mean * 0.25,
+            "uneven camera step {s:.1} vs mean {mean:.1}: {steps:?}"
+        );
     }
 }
-
 
 /// Every Smacker cutscene copied from the user's disc decodes from start to end.
 #[test]
 fn all_cutscenes_decode() {
-    let Some(dir) = std::env::var("OPENBLOOD_DATA").ok() else { return };
-    let Ok(rd) = std::fs::read_dir(std::path::Path::new(&dir).join("movie")) else { return };
+    let Some(dir) = std::env::var("OPENBLOOD_DATA").ok() else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(std::path::Path::new(&dir).join("movie")) else {
+        return;
+    };
     let mut n = 0;
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_ascii_uppercase();

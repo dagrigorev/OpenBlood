@@ -402,7 +402,11 @@ fn font_glyph(res: &Resources, font: i32, c: char) -> Option<(i32, f64)> {
     for f in [font, 1, 0, 3, 4] {
         let pic = font_base(f) + idx;
         if !res.tiles.get(pic).is_empty() {
-            let dy = if f == font { 0.0 } else { (height(font) - height(f)).max(0.0) };
+            let dy = if f == font {
+                0.0
+            } else {
+                (height(font) - height(f)).max(0.0)
+            };
             return Some((pic, dy));
         }
     }

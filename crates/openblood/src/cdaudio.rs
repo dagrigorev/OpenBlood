@@ -142,7 +142,10 @@ pub fn stream_wav(path: &Path) -> Option<std::sync::mpsc::Receiver<Vec<i16>>> {
                 return;
             }
             left -= n as u64;
-            let samples: Vec<i16> = bytes[..n].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+            let samples: Vec<i16> = bytes[..n]
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .collect();
             if tx.send(samples).is_err() {
                 return; // music stopped or changed
             }

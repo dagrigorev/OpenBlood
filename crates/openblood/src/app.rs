@@ -280,7 +280,9 @@ impl App {
                 }
                 self.last = Instant::now();
             }
-            let Some(next) = self.movie_queue.pop_front() else { return false };
+            let Some(next) = self.movie_queue.pop_front() else {
+                return false;
+            };
             if let Some(m) = crate::movie::Movie::open(&next.video) {
                 if let (Some(a), Some(w)) = (&mut self.audio, next.wav.as_ref()) {
                     if let Some((samples, rate)) = crate::movie::load_wav_u8(w) {
@@ -600,7 +602,12 @@ impl App {
         let _ = buf.present();
         prof.mark("present");
         self.pace_frame();
-        prof.finish(&self.game.world.map_name, self.game.clock, self.start_time.elapsed().as_secs_f64(), &mut self.prof_log);
+        prof.finish(
+            &self.game.world.map_name,
+            self.game.clock,
+            self.start_time.elapsed().as_secs_f64(),
+            &mut self.prof_log,
+        );
         // Profiling aid: OB_AUTOSWITCH=N switches to the next level every N seconds.
         if let Some(n) = std::env::var("OB_AUTOSWITCH").ok().and_then(|v| v.parse::<f64>().ok()) {
             if self.last_switch.elapsed().as_secs_f64() > n {
@@ -641,7 +648,18 @@ impl App {
         }
         let Ok(mut buf) = surface.buffer_mut() else { return };
         buf.fill(0);
-        crate::scale::resample(&m.pixels, mw, mh, &mut buf, ww, ox, oy, dw, dh, crate::config::Upscale::Smooth);
+        crate::scale::resample(
+            &m.pixels,
+            mw,
+            mh,
+            &mut buf,
+            ww,
+            ox,
+            oy,
+            dw,
+            dh,
+            crate::config::Upscale::Smooth,
+        );
         let _ = buf.present();
         self.pace_frame();
     }
@@ -886,7 +904,11 @@ fn flush_profile(log: &mut Vec<String>) {
     if log.is_empty() {
         return;
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("openblood-profile.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("openblood-profile.log")
+    {
         let _ = f.write_all(log.concat().as_bytes());
     }
     log.clear();

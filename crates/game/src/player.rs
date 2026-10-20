@@ -153,7 +153,9 @@ impl Player {
     pub fn view_z(&self) -> f64 {
         let bob = (self.bob_phase).sin() * self.bob_amp;
         // Under a ceiling lower than the eye, stay just below it (and above the feet).
-        (self.z - self.eye + bob).max(self.ceil_z + 0x400 as f64).min(self.z - 0x400 as f64)
+        (self.z - self.eye + bob)
+            .max(self.ceil_z + 0x400 as f64)
+            .min(self.z - 0x400 as f64)
     }
 
     /// Advances movement by `dt` seconds.

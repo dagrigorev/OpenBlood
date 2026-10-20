@@ -336,7 +336,10 @@ impl Renderer {
         let fly = fl * self.y_stretch;
         let horizon = h as f64 * 0.5 - cam.horiz * h as f64 / 200.0;
         let row_k: Vec<f64> = (0..h).map(|y| (y as f64 + 0.5 - horizon) / fly * 16.0).collect();
-        let row_inv_k = row_k.iter().map(|&k| if k.abs() < 1e-12 { 0.0 } else { 1.0 / k }).collect();
+        let row_inv_k = row_k
+            .iter()
+            .map(|&k| if k.abs() < 1e-12 { 0.0 } else { 1.0 / k })
+            .collect();
         View {
             w,
             h,
@@ -387,7 +390,9 @@ impl Renderer {
                     mask.fill(0);
                     portals.clear();
                 }
-                cast_column(x, scene, cam, &view, sky_scale, pix, depth, mask, portals, masked, visited);
+                cast_column(
+                    x, scene, cam, &view, sky_scale, pix, depth, mask, portals, masked, visited,
+                );
             });
 
         let t1 = std::time::Instant::now();
@@ -506,16 +511,19 @@ impl Renderer {
         // In bands of rows so each column is read as a short contiguous run (a plain
         // per-pixel strided read was a quarter of the frame time at 8K).
         const BAND: usize = 32;
-        self.frame.par_chunks_mut(w * BAND).enumerate().for_each(|(band, rows)| {
-            let y0 = band * BAND;
-            let n = rows.len() / w;
-            for x in 0..w {
-                let src = &col[x * h + y0..x * h + y0 + n];
-                for (k, &p) in src.iter().enumerate() {
-                    rows[k * w + x] = p;
+        self.frame
+            .par_chunks_mut(w * BAND)
+            .enumerate()
+            .for_each(|(band, rows)| {
+                let y0 = band * BAND;
+                let n = rows.len() / w;
+                for x in 0..w {
+                    let src = &col[x * h + y0..x * h + y0 + n];
+                    for (k, &p) in src.iter().enumerate() {
+                        rows[k * w + x] = p;
+                    }
                 }
-            }
-        });
+            });
         let t4 = std::time::Instant::now();
         let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
         self.phase_ms = [ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4)];
@@ -924,7 +932,11 @@ fn draw_plane(
 
     let flat = b == 0.0;
     for y in r0..r1 {
-        let k = if flat { view.row_k[y] } else { (y as f64 + 0.5 - view.horizon) * k_scale };
+        let k = if flat {
+            view.row_k[y]
+        } else {
+            (y as f64 + 0.5 - view.horizon) * k_scale
+        };
         let den = k - b;
         if den.abs() < 1e-12 {
             pix[y] = 0;
@@ -1065,7 +1077,15 @@ impl ColTrace {
                 s = crate::geom::update_sector(sectors, walls, sx, sy, s);
             }
         }
-        ColTrace { segs: Vec::with_capacity(8), next: s, t_in: t_start, ox, oy, dx, dy }
+        ColTrace {
+            segs: Vec::with_capacity(8),
+            next: s,
+            t_in: t_start,
+            ox,
+            oy,
+            dx,
+            dy,
+        }
     }
 
     /// Segment `i`, computing it (and any before it) if needed.
@@ -1091,14 +1111,26 @@ impl ColTrace {
             let ceil = plane_eq(sec, walls, &sec.ceiling);
             let floor = plane_eq(sec, walls, &sec.floor);
             let Some((t, u, wi)) = best else {
-                self.segs.push(ColSeg { sector: si, t1: 1e9, ceil, floor, wall: None });
+                self.segs.push(ColSeg {
+                    sector: si,
+                    t1: 1e9,
+                    ceil,
+                    floor,
+                    wall: None,
+                });
                 self.next = -1;
                 continue;
             };
             let w = &walls[wi];
             let next = (w.nextsector >= 0)
                 .then(|| crate::geom::zs_of_slope(sectors, walls, w.nextsector as usize, ox + dx * t, oy + dy * t));
-            self.segs.push(ColSeg { sector: si, t1: t, ceil, floor, wall: Some((wi, u, next)) });
+            self.segs.push(ColSeg {
+                sector: si,
+                t1: t,
+                ceil,
+                floor,
+                wall: Some((wi, u, next)),
+            });
             self.next = w.nextsector as i32;
             self.t_in = t;
         }
@@ -1159,8 +1191,15 @@ fn trace_column(
         let hz = oz + dz * t;
         match next {
             None => {
-                let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 { sec.floor.z } else { sec.ceiling.z } as f64;
-                return (sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t), t);
+                let zref = if w.cstat & WALL_ALIGN_BOTTOM != 0 {
+                    sec.floor.z
+                } else {
+                    sec.ceiling.z
+                } as f64;
+                return (
+                    sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
+                    t,
+                );
             }
             Some((c, f)) => {
                 let ns = w.nextsector as usize;
@@ -1170,7 +1209,10 @@ fn trace_column(
                     } else {
                         sectors[ns].ceiling.z
                     } as f64;
-                    return (sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t), t);
+                    return (
+                        sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
+                        t,
+                    );
                 }
                 if hz > f {
                     let src = if w.cstat & WALL_BOTTOM_SWAP != 0 && w.nextwall >= 0 {
@@ -1183,7 +1225,10 @@ fn trace_column(
                     } else {
                         sectors[ns].floor.z
                     } as f64;
-                    return (sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, t), t);
+                    return (
+                        sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, t),
+                        t,
+                    );
                 }
             }
         }

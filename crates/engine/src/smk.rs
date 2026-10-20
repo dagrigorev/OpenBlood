@@ -56,7 +56,10 @@ struct SmallTree {
 
 impl SmallTree {
     fn read(br: &mut Bits) -> io::Result<SmallTree> {
-        let mut t = SmallTree { nodes: Vec::new(), values: Vec::new() };
+        let mut t = SmallTree {
+            nodes: Vec::new(),
+            values: Vec::new(),
+        };
         if br.bit() == 0 {
             return Ok(t); // empty: always 0
         }
@@ -105,7 +108,11 @@ struct BigTree {
 
 impl BigTree {
     fn read(br: &mut Bits) -> io::Result<BigTree> {
-        let mut t = BigTree { nodes: Vec::new(), values: Vec::new(), last: [0; 3] };
+        let mut t = BigTree {
+            nodes: Vec::new(),
+            values: Vec::new(),
+            last: [0; 3],
+        };
         if br.bit() == 0 {
             // Empty tree: every value is 0 and no bits are read.
             t.values = vec![0; 3];
@@ -271,7 +278,12 @@ impl Smk {
         p += n;
         let (mmap, mclr, full, ty) = {
             let mut br = Bits::new(&data[p..p + trees_size]);
-            (BigTree::read(&mut br)?, BigTree::read(&mut br)?, BigTree::read(&mut br)?, BigTree::read(&mut br)?)
+            (
+                BigTree::read(&mut br)?,
+                BigTree::read(&mut br)?,
+                BigTree::read(&mut br)?,
+                BigTree::read(&mut br)?,
+            )
         };
         p += trees_size;
         let mut offsets = Vec::with_capacity(n);
@@ -364,7 +376,11 @@ impl Smk {
                 }
                 i += n;
             } else {
-                let (r, g, b) = (t, self.data.get(p).copied().unwrap_or(0), self.data.get(p + 1).copied().unwrap_or(0));
+                let (r, g, b) = (
+                    t,
+                    self.data.get(p).copied().unwrap_or(0),
+                    self.data.get(p + 1).copied().unwrap_or(0),
+                );
                 p += 2;
                 self.palette[i] = (pal6(r) << 16) | (pal6(g) << 8) | pal6(b);
                 i += 1;

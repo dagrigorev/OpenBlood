@@ -254,7 +254,10 @@ impl Triggers {
                 continue;
             }
             // Split doors (forward + reverse panels) always move.
-            if world.sector_walls(s).any(|w| world.walls[w].cstat & WALL_MOVE_REVERSE != 0) {
+            if world
+                .sector_walls(s)
+                .any(|w| world.walls[w].cstat & WALL_MOVE_REVERSE != 0)
+            {
                 continue;
             }
             let (ax, ay, _) = world.base_sprite_xy[m0];
@@ -280,7 +283,10 @@ impl Triggers {
                     .iter()
                     .filter_map(|&(w, _)| usize::try_from(world.walls[w].nextsector).ok())
                     .collect();
-                if touched.iter().any(|&ts| beside.contains(&ts) && sector_folds(world, ts, &pos)) {
+                if touched
+                    .iter()
+                    .any(|&ts| beside.contains(&ts) && sector_folds(world, ts, &pos))
+                {
                     out.insert(s);
                 }
             }

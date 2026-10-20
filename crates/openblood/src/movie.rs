@@ -24,7 +24,11 @@ impl Movie {
         let mut smk = Smk::parse(data).ok()?;
         smk.next_frame().ok()?;
         let pixels = smk.pixels();
-        Some(Movie { smk, start: Instant::now(), pixels })
+        Some(Movie {
+            smk,
+            start: Instant::now(),
+            pixels,
+        })
     }
 
     pub fn width(&self) -> usize {

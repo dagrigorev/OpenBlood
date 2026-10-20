@@ -188,7 +188,10 @@ impl Config {
 }
 
 fn parse_resolution(v: &str) -> Option<(u32, u32)> {
-    let (w, h) = v.to_ascii_lowercase().split_once('x').map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))?;
+    let (w, h) = v
+        .to_ascii_lowercase()
+        .split_once('x')
+        .map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))?;
     let (w, h) = (w.parse().ok()?, h.parse().ok()?);
     (w >= 320 && h >= 200).then_some((w, h))
 }
@@ -246,10 +249,14 @@ skill = {}
             self.skill,
         );
         match &self.start_map {
-            Some(m) => out.push_str(&format!("start_map = {m}
-")),
-            None => out.push_str("; start_map = E1M1
-"),
+            Some(m) => out.push_str(&format!(
+                "start_map = {m}
+"
+            )),
+            None => out.push_str(
+                "; start_map = E1M1
+",
+            ),
         }
         std::fs::write(path, out)
     }
@@ -277,10 +284,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ob_cfg_rt_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("openblood.ini");
-        std::fs::write(&p, "resolution = 1920x1080
+        std::fs::write(
+            &p,
+            "resolution = 1920x1080
 upscale = smooth
 antialias = 2
-").unwrap();
+",
+        )
+        .unwrap();
         let mut c = Config::load(&p);
         assert_eq!(c.resolution, Some((1920, 1080)));
         assert_eq!(c.upscale, Upscale::Smooth);

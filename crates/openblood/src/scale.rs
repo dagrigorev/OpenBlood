@@ -23,48 +23,56 @@ pub fn resample(
         return;
     }
     if sw == dw && sh == dh {
-        dst.par_chunks_mut(stride).skip(oy).take(dh).enumerate().for_each(|(y, row)| {
-            row[ox..ox + dw].copy_from_slice(&src[y * sw..y * sw + sw]);
-        });
+        dst.par_chunks_mut(stride)
+            .skip(oy)
+            .take(dh)
+            .enumerate()
+            .for_each(|(y, row)| {
+                row[ox..ox + dw].copy_from_slice(&src[y * sw..y * sw + sw]);
+            });
         return;
     }
     let (fx, fy) = (sw as f64 / dw as f64, sh as f64 / dh as f64);
     let shrink = fx > 1.0 && fy > 1.0;
     // Per-axis source sample positions, precomputed once per frame.
     let xs: Vec<Tap> = (0..dw).map(|x| Tap::new(x, fx, sw, mode)).collect();
-    dst.par_chunks_mut(stride).skip(oy).take(dh).enumerate().for_each(|(y, row)| {
-        let out = &mut row[ox..ox + dw];
-        if shrink {
-            let y0 = (y as f64 * fy) as usize;
-            let y1 = (((y + 1) as f64 * fy).ceil() as usize).clamp(y0 + 1, sh);
-            for (x, o) in out.iter_mut().enumerate() {
-                let x0 = (x as f64 * fx) as usize;
-                let x1 = (((x + 1) as f64 * fx).ceil() as usize).clamp(x0 + 1, sw);
-                let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
-                for sy in y0..y1 {
-                    for &p in &src[sy * sw + x0..sy * sw + x1] {
-                        r += (p >> 16) & 255;
-                        g += (p >> 8) & 255;
-                        b += p & 255;
-                        n += 1;
+    dst.par_chunks_mut(stride)
+        .skip(oy)
+        .take(dh)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let out = &mut row[ox..ox + dw];
+            if shrink {
+                let y0 = (y as f64 * fy) as usize;
+                let y1 = (((y + 1) as f64 * fy).ceil() as usize).clamp(y0 + 1, sh);
+                for (x, o) in out.iter_mut().enumerate() {
+                    let x0 = (x as f64 * fx) as usize;
+                    let x1 = (((x + 1) as f64 * fx).ceil() as usize).clamp(x0 + 1, sw);
+                    let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+                    for sy in y0..y1 {
+                        for &p in &src[sy * sw + x0..sy * sw + x1] {
+                            r += (p >> 16) & 255;
+                            g += (p >> 8) & 255;
+                            b += p & 255;
+                            n += 1;
+                        }
                     }
+                    *o = ((r / n) << 16) | ((g / n) << 8) | (b / n);
                 }
-                *o = ((r / n) << 16) | ((g / n) << 8) | (b / n);
+                return;
             }
-            return;
-        }
-        let ty = Tap::new(y, fy, sh, mode);
-        let (r0, r1) = (&src[ty.i0 * sw..ty.i0 * sw + sw], &src[ty.i1 * sw..ty.i1 * sw + sw]);
-        for (o, tx) in out.iter_mut().zip(&xs) {
-            *o = if mode == Upscale::Nearest {
-                r0[tx.i0]
-            } else {
-                let top = mix(r0[tx.i0], r0[tx.i1], tx.w);
-                let bot = mix(r1[tx.i0], r1[tx.i1], tx.w);
-                mix(top, bot, ty.w)
-            };
-        }
-    });
+            let ty = Tap::new(y, fy, sh, mode);
+            let (r0, r1) = (&src[ty.i0 * sw..ty.i0 * sw + sw], &src[ty.i1 * sw..ty.i1 * sw + sw]);
+            for (o, tx) in out.iter_mut().zip(&xs) {
+                *o = if mode == Upscale::Nearest {
+                    r0[tx.i0]
+                } else {
+                    let top = mix(r0[tx.i0], r0[tx.i1], tx.w);
+                    let bot = mix(r1[tx.i0], r1[tx.i1], tx.w);
+                    mix(top, bot, ty.w)
+                };
+            }
+        });
 }
 
 /// Like [`resample`], but the source is column-major (`src[x * sh + y]`, the renderer's
@@ -239,7 +247,9 @@ mod tests {
     #[test]
     fn column_major_matches_row_major() {
         let (sw, sh) = (37, 23);
-        let rows: Vec<u32> = (0..sw * sh).map(|i| (i as u32 * 2654435761) & 0xffffff).collect();
+        let rows: Vec<u32> = (0..sw * sh)
+            .map(|i| (i as u32).wrapping_mul(2654435761) & 0xffffff)
+            .collect();
         let mut cols = vec![0u32; sw * sh];
         for y in 0..sh {
             for x in 0..sw {
@@ -261,7 +271,9 @@ mod tests {
     #[test]
     fn half_size_fast_path_matches_box_average() {
         let (sw, sh) = (40, 24);
-        let rows: Vec<u32> = (0..sw * sh).map(|i| (i as u32 * 2654435761) & 0xffffff).collect();
+        let rows: Vec<u32> = (0..sw * sh)
+            .map(|i| (i as u32).wrapping_mul(2654435761) & 0xffffff)
+            .collect();
         let mut cols = vec![0u32; sw * sh];
         for y in 0..sh {
             for x in 0..sw {
@@ -273,7 +285,12 @@ mod tests {
         resample_cols(&cols, sw, sh, &mut fast, dw, 0, 0, dw, dh, Upscale::Sharp);
         for y in 0..dh {
             for x in 0..dw {
-                let px = [rows[2 * y * sw + 2 * x], rows[2 * y * sw + 2 * x + 1], rows[(2 * y + 1) * sw + 2 * x], rows[(2 * y + 1) * sw + 2 * x + 1]];
+                let px = [
+                    rows[2 * y * sw + 2 * x],
+                    rows[2 * y * sw + 2 * x + 1],
+                    rows[(2 * y + 1) * sw + 2 * x],
+                    rows[(2 * y + 1) * sw + 2 * x + 1],
+                ];
                 let avg = |sh: u32| px.iter().map(|p| (p >> sh) & 255).sum::<u32>() / 4;
                 let want = (avg(16) << 16) | (avg(8) << 8) | avg(0);
                 assert_eq!(fast[y * dw + x], want, "at {x},{y}");

@@ -1913,7 +1913,11 @@ impl Game {
     // ------------------------------------------------------------------ view
 
     pub fn camera(&self) -> Camera {
-        let (x, y, z) = lerp3(self.prev_eye, (self.player.x, self.player.y, self.player.view_z()), self.alpha());
+        let (x, y, z) = lerp3(
+            self.prev_eye,
+            (self.player.x, self.player.y, self.player.view_z()),
+            self.alpha(),
+        );
         Camera {
             x,
             y,
@@ -1982,7 +1986,10 @@ impl Game {
             // Dudes keep z at their feet; each animation frame's own offsets would otherwise
             // sink walking frames into the floor, so the frame's bottom edge goes to z.
             if s.statnum == stat::DUDE && s.cstat & 48 == 0 {
-                let frame = Sprite { picnum: pic as i16, ..s.clone() };
+                let frame = Sprite {
+                    picnum: pic as i16,
+                    ..s.clone()
+                };
                 let (_, bot) = sprite_extents(res, &frame);
                 z -= bot - s.z as f64;
             }

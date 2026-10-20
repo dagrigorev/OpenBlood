@@ -19,7 +19,7 @@ pub struct Sound {
     pub pitch: f32,
 }
 
-/// Parses a Blood `.SFX` descriptor: relVol, pitch, pitchRange, format, loopStart, rawName[9].
+/// Parses a Blood `.SFX` descriptor: relVol, pitch, pitchRange, format, loopStart, `rawName[9]`.
 pub fn parse_sfx(b: &[u8]) -> Option<(i32, i32, i32, i32, i32, String)> {
     if b.len() < 21 {
         return None;
@@ -221,7 +221,11 @@ impl Audio {
             self.load(res, *id as i32);
         }
         if std::env::var_os("OB_PROFILE").is_some() {
-            eprintln!("preloaded {} sounds in {:.1} ms", ids.len(), t.elapsed().as_secs_f64() * 1e3);
+            eprintln!(
+                "preloaded {} sounds in {:.1} ms",
+                ids.len(),
+                t.elapsed().as_secs_f64() * 1e3
+            );
         }
     }
 
@@ -429,7 +433,11 @@ impl Audio {
         ];
         // Streamed from disk: no big allocation or conversion when a level starts.
         if let Some(rx) = candidates.iter().find_map(|p| crate::cdaudio::stream_wav(p)) {
-            mixer.lock().unwrap().music = Some(MusicStream { rx, cur: Vec::new(), pos: 0.0 });
+            mixer.lock().unwrap().music = Some(MusicStream {
+                rx,
+                cur: Vec::new(),
+                pos: 0.0,
+            });
         }
     }
 }

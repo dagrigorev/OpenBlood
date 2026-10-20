@@ -1,7 +1,7 @@
 //! Front-end menus drawn with the original Blood font and art tiles.
 
-use crate::hud::{tile_text, tile_text_width, vtile, Anchor};
 use crate::config::{Upscale, ANTIALIAS, MAX_FPS, RESOLUTIONS};
+use crate::hud::{tile_text, tile_text_width, vtile, Anchor};
 use ob_engine::render::ShadeLuts;
 use ob_game::resources::Resources;
 
@@ -111,7 +111,10 @@ impl Menu {
                 },
                 format!("Render Scale: {:.0}%", opts.scale * 100.0),
                 format!("Upscale: {}", opts.upscale.name()),
-                format!("Anti-aliasing: {}", ANTIALIAS[opts.antialias.min(ANTIALIAS.len() - 1)].0),
+                format!(
+                    "Anti-aliasing: {}",
+                    ANTIALIAS[opts.antialias.min(ANTIALIAS.len() - 1)].0
+                ),
                 match opts.max_fps {
                     0 => "Max FPS: Unlimited".to_string(),
                     n => format!("Max FPS: {n}"),
@@ -450,7 +453,9 @@ fn step<T: Copy + PartialEq>(all: &[T], cur: T, dir: i32) -> T {
 
 /// Cycles Native -> listed resolutions -> Native.
 fn step_resolution(cur: Option<(u32, u32)>, dir: i32) -> Option<(u32, u32)> {
-    let all: Vec<Option<(u32, u32)>> = std::iter::once(None).chain(RESOLUTIONS.iter().map(|&r| Some(r))).collect();
+    let all: Vec<Option<(u32, u32)>> = std::iter::once(None)
+        .chain(RESOLUTIONS.iter().map(|&r| Some(r)))
+        .collect();
     step(&all, cur, dir)
 }
 
