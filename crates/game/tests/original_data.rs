@@ -464,3 +464,26 @@ fn camera_moves_smoothly_between_ticks() {
         assert!((s - mean).abs() < mean * 0.25, "uneven camera step {s:.1} vs mean {mean:.1}: {steps:?}");
     }
 }
+
+
+/// Every Smacker cutscene copied from the user's disc decodes from start to end.
+#[test]
+fn all_cutscenes_decode() {
+    let Some(dir) = std::env::var("OPENBLOOD_DATA").ok() else { return };
+    let Ok(rd) = std::fs::read_dir(std::path::Path::new(&dir).join("movie")) else { return };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_ascii_uppercase();
+        if !name.ends_with(".SMK") {
+            continue;
+        }
+        let mut v = ob_engine::smk::Smk::parse(std::fs::read(e.path()).unwrap()).unwrap();
+        let mut frames = 0;
+        while v.next_frame().unwrap_or_else(|err| panic!("{name}: {err}")) {
+            frames += 1;
+        }
+        assert_eq!(frames, v.frames, "{name}");
+        n += 1;
+    }
+    eprintln!("decoded {n} cutscenes");
+}

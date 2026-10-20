@@ -151,6 +151,71 @@ pub fn stream_wav(path: &Path) -> Option<std::sync::mpsc::Receiver<Vec<i16>>> {
     Some(rx)
 }
 
+/// Reads the ISO 9660 filesystem of the disc's data track (raw 2352-byte sectors) and copies
+/// the files of `dir` (e.g. `MOVIE`, Blood's cutscenes) to `out`. Returns the names copied.
+pub fn extract_dir(cue: &Path, dir: &str, out: &Path) -> io::Result<Vec<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (bin, tracks) = parse_cue(cue)?;
+    let data = tracks
+        .iter()
+        .find(|t| !t.audio)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data track"))?;
+    let base = data.index1;
+    let mut f = std::fs::File::open(&bin)?;
+    // User data offset inside a raw sector: 16 for mode 1, 24 for mode 2 form 1.
+    let mut read_sector = |lba: u64| -> io::Result<Vec<u8>> {
+        let mut raw = vec![0u8; SECTOR as usize];
+        f.seek(SeekFrom::Start((base + lba) * SECTOR))?;
+        f.read_exact(&mut raw)?;
+        let off = if raw[15] == 2 { 24 } else { 16 };
+        Ok(raw[off..off + 2048].to_vec())
+    };
+    let pvd = read_sector(16)?;
+    if &pvd[1..6] != b"CD001" {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "no ISO 9660 filesystem"));
+    }
+    let le32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as u64;
+    // Directory records: (name, extent, size, is_dir).
+    let mut list = |lba: u64, size: u64| -> io::Result<Vec<(String, u64, u64, bool)>> {
+        let mut out = Vec::new();
+        for k in 0..size.div_ceil(2048) {
+            let sec = read_sector(lba + k)?;
+            let mut p = 0;
+            while p < 2048 && sec[p] != 0 {
+                let len = sec[p] as usize;
+                let nlen = sec[p + 32] as usize;
+                let name = String::from_utf8_lossy(&sec[p + 33..p + 33 + nlen]).to_string();
+                let name = name.split(';').next().unwrap_or("").to_string();
+                out.push((name, le32(&sec, p + 2), le32(&sec, p + 10), sec[p + 25] & 2 != 0));
+                p += len;
+            }
+        }
+        Ok(out)
+    };
+    let root = list(le32(&pvd, 156 + 2), le32(&pvd, 156 + 10))?;
+    let (_, lba, size, _) = root
+        .into_iter()
+        .find(|e| e.3 && e.0.eq_ignore_ascii_case(dir))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no {dir} folder on the disc")))?;
+    std::fs::create_dir_all(out)?;
+    let mut copied = Vec::new();
+    for (name, flba, fsize, is_dir) in list(lba, size)? {
+        // Only the videos and their soundtracks (not installer files or AVI duplicates).
+        let up = name.to_ascii_uppercase();
+        if is_dir || !(up.ends_with(".SMK") || up.ends_with(".WAV")) {
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(fsize as usize);
+        for k in 0..fsize.div_ceil(2048) {
+            bytes.extend_from_slice(&read_sector(flba + k)?);
+        }
+        bytes.truncate(fsize as usize);
+        std::fs::write(out.join(&name), &bytes)?;
+        copied.push(name);
+    }
+    Ok(copied)
+}
+
 #[allow(dead_code)]
 pub fn load_wav(path: &Path) -> Option<Vec<f32>> {
     let b = std::fs::read(path).ok()?;

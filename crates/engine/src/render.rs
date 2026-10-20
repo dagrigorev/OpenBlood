@@ -294,7 +294,8 @@ impl Renderer {
             masked: Vec::new(),
             visited: Vec::new(),
             sky_scale: 1.0,
-            y_stretch: 1.2,
+            // Vertical/horizontal focal ratio; 1.0 matched the original best (see EYE_STAND).
+            y_stretch: 1.0,
             phase_ms: [0.0; 4],
             keep_rows: true,
             col_portals: Vec::new(),

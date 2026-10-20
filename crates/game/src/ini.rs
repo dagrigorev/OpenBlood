@@ -22,6 +22,14 @@ pub struct Episode {
     pub title: String,
     pub maps: Vec<String>,
     pub bloodbath_only: bool,
+    /// Cutscene played when entering map number `cutscene_a_level` (1-based) of the episode,
+    /// and one played when the episode ends; each with its WAV soundtrack (paths as written
+    /// in BLOOD.INI; only the file names are used).
+    pub cutscene_a: Option<String>,
+    pub wav_a: Option<String>,
+    pub cutscene_a_level: usize,
+    pub cutscene_b: Option<String>,
+    pub wav_b: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -42,7 +50,10 @@ impl BloodIni {
             if line.starts_with('[') && line.ends_with(']') {
                 section = line[1..line.len() - 1].trim().to_ascii_uppercase();
                 if section.starts_with("EPISODE") {
-                    ini.episodes.push(Episode::default());
+                    ini.episodes.push(Episode {
+                        cutscene_a_level: 1,
+                        ..Default::default()
+                    });
                 } else if section != "INSTALL" {
                     ini.maps.entry(section.clone()).or_insert_with(|| MapInfo {
                         file: section.clone(),
@@ -59,6 +70,11 @@ impl BloodIni {
                 match k.as_str() {
                     "title" => ep.title = v,
                     "bloodbathonly" => ep.bloodbath_only = v.trim() != "0",
+                    "cutscenea" => ep.cutscene_a = Some(v),
+                    "cutwava" => ep.wav_a = Some(v),
+                    "cutsceneb" => ep.cutscene_b = Some(v),
+                    "cutwavb" => ep.wav_b = Some(v),
+                    "cutscenealevel" => ep.cutscene_a_level = v.trim().parse().unwrap_or(1),
                     _ if k.starts_with("map") && k[3..].chars().all(|c| c.is_ascii_digit()) => {
                         let n: usize = k[3..].parse().unwrap_or(0);
                         if n > 0 {

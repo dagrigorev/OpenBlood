@@ -28,7 +28,13 @@ pub struct Input {
     pub inv_use: bool,
 }
 
-pub const EYE_STAND: f64 = 0x2c00 as f64;
+/// Eye height above the feet. Fitted against screenshots of the original's opening views
+/// on six maps (with the renderer's vertical scale 1.0).
+fn no_ceiling() -> f64 {
+    f64::MIN / 4.0
+}
+
+pub const EYE_STAND: f64 = 0x3800 as f64;
 pub const EYE_CROUCH: f64 = 0x1400 as f64;
 pub const HEIGHT_STAND: f64 = 0x3400 as f64;
 pub const HEIGHT_CROUCH: f64 = 0x1c00 as f64;
@@ -76,6 +82,10 @@ pub struct Player {
     pub last_hit: Hit,
     pub sprite: i32,
     pub fall_speed_peak: f64,
+    /// Ceiling height above the player at the last update (keeps the eye, which is higher
+    /// than the collision height, below low ceilings). Not saved; refreshed every tick.
+    #[serde(skip, default = "no_ceiling")]
+    pub ceil_z: f64,
     /// Jump strength multiplier (jumping boots).
     pub jump_scale: f64,
 }
@@ -111,6 +121,7 @@ impl Player {
             last_hit: Hit::None,
             sprite: -1,
             fall_speed_peak: 0.0,
+            ceil_z: no_ceiling(),
             jump_scale: 1.0,
         };
         if sect >= 0 {
@@ -141,7 +152,8 @@ impl Player {
     /// Camera z (eye position) including view bob.
     pub fn view_z(&self) -> f64 {
         let bob = (self.bob_phase).sin() * self.bob_amp;
-        self.z - self.eye + bob
+        // Under a ceiling lower than the eye, stay just below it (and above the feet).
+        (self.z - self.eye + bob).max(self.ceil_z + 0x400 as f64).min(self.z - 0x400 as f64)
     }
 
     /// Advances movement by `dt` seconds.
@@ -277,6 +289,7 @@ impl Player {
         } else {
             self.on_ground = self.z >= fz - 16.0;
         }
+        self.ceil_z = cz;
         let head = self.z - self.height();
         if head < cz {
             self.z = (cz + self.height()).min(fz);

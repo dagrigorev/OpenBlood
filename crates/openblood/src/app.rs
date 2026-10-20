@@ -50,6 +50,9 @@ pub struct App {
     shot_pending: bool,
     /// When the next capped frame may start.
     pace_next: Option<Instant>,
+    /// Cutscene playing, and those queued after it.
+    movie: Option<crate::movie::Movie>,
+    movie_queue: std::collections::VecDeque<crate::movie::MovieFile>,
     prof_log: Vec<String>,
     last_switch: Instant,
     message: Option<(String, Instant)>,
@@ -98,6 +101,8 @@ impl App {
             out: Vec::new(),
             shot_pending: false,
             pace_next: None,
+            movie: None,
+            movie_queue: Default::default(),
             prof_log: Vec::new(),
             last_switch: Instant::now(),
             message: None,
@@ -208,6 +213,7 @@ impl App {
                 }
                 self.game = g;
                 self.audio_map.clear();
+                self.queue_episode_movie(name, true);
                 let title = self.res.ini.map(name).map(|m| m.title.clone()).unwrap_or_default();
                 self.flash(if title.is_empty() {
                     name.to_string()
@@ -221,6 +227,9 @@ impl App {
 
     fn level_exit(&mut self, secret: bool) {
         let cur = self.game.world.map_name.clone();
+        if !secret && self.res.ini.next_map(&cur, false).is_none() {
+            self.queue_episode_movie(&cur, false);
+        }
         let next = self.res.ini.next_map(&cur, secret).or_else(|| {
             // Episode finished: continue with the first map of the next episode.
             let (e, _) = self.res.ini.locate(&cur)?;
@@ -229,6 +238,67 @@ impl App {
         match next {
             Some(n) => self.load_named(&n, true),
             None => self.flash("The End. Thanks for playing!".into()),
+        }
+    }
+
+    /// Queues cutscenes to play before the game continues.
+    pub fn queue_movies(&mut self, files: Vec<crate::movie::MovieFile>) {
+        self.movie_queue.extend(files);
+    }
+
+    /// Cutscene A of the episode when `map` is its cutscene level (`entering`), or the
+    /// episode's ending cutscene B (when leaving its last map).
+    fn queue_episode_movie(&mut self, map: &str, entering: bool) {
+        let Some((e, m)) = self.res.ini.locate(map) else { return };
+        let ep = &self.res.ini.episodes[e];
+        let (video, wav) = if entering {
+            if m + 1 != ep.cutscene_a_level.max(1) {
+                return;
+            }
+            (ep.cutscene_a.clone(), ep.wav_a.clone())
+        } else {
+            (ep.cutscene_b.clone(), ep.wav_b.clone())
+        };
+        let dir = self.res.dir.clone();
+        if let Some(video) = video.and_then(|v| crate::movie::find(&dir, &v)) {
+            let wav = wav.and_then(|w| crate::movie::find(&dir, &w));
+            self.movie_queue.push_back(crate::movie::MovieFile { video, wav });
+        }
+    }
+
+    /// Starts the next queued cutscene if none is playing; advances the current one.
+    /// Returns true while a cutscene is on screen.
+    fn update_movie(&mut self) -> bool {
+        loop {
+            if let Some(m) = &mut self.movie {
+                if m.update() {
+                    return true;
+                }
+                self.movie = None;
+                if let Some(a) = &mut self.audio {
+                    a.stop_movie();
+                }
+                self.last = Instant::now();
+            }
+            let Some(next) = self.movie_queue.pop_front() else { return false };
+            if let Some(m) = crate::movie::Movie::open(&next.video) {
+                if let (Some(a), Some(w)) = (&mut self.audio, next.wav.as_ref()) {
+                    if let Some((samples, rate)) = crate::movie::load_wav_u8(w) {
+                        a.play_movie_sound(samples, rate);
+                    }
+                }
+                self.movie = Some(m);
+            }
+        }
+    }
+
+    /// Skips the current cutscene (any key or mouse button).
+    fn skip_movie(&mut self) {
+        if self.movie.take().is_some() {
+            if let Some(a) = &mut self.audio {
+                a.stop_movie();
+            }
+            self.last = Instant::now();
         }
     }
 
@@ -394,6 +464,10 @@ impl App {
     }
 
     fn frame(&mut self) {
+        if self.update_movie() {
+            self.draw_movie();
+            return;
+        }
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f64();
         self.last = now;
@@ -548,6 +622,30 @@ impl App {
         }
     }
 
+    /// Shows the current cutscene frame, fitted to 4:3 (as on the original's screen).
+    fn draw_movie(&mut self) {
+        let Some(window) = self.window.clone() else { return };
+        let size = window.inner_size();
+        let (ww, wh) = (size.width.max(1) as usize, size.height.max(1) as usize);
+        let Some(m) = &self.movie else { return };
+        let (mw, mh) = (m.width(), m.height());
+        // Shown as on a 4:3 screen: 320x200 pixels fill 4:3 (each pixel 4/320 x 3/200).
+        let (aw, ah) = (mw * 800, mh * 960);
+        let (ox, oy, dw, dh) = crate::scale::fit(ww, wh, aw.max(1), ah.max(1));
+        let Some(surface) = self.surface.as_mut() else { return };
+        if surface
+            .resize(NonZeroU32::new(ww as u32).unwrap(), NonZeroU32::new(wh as u32).unwrap())
+            .is_err()
+        {
+            return;
+        }
+        let Ok(mut buf) = surface.buffer_mut() else { return };
+        buf.fill(0);
+        crate::scale::resample(&m.pixels, mw, mh, &mut buf, ww, ox, oy, dw, dh, crate::config::Upscale::Smooth);
+        let _ = buf.present();
+        self.pace_frame();
+    }
+
     /// Frame-rate cap: waits until this frame's slot ends. Sleeps most of the way (Rust's
     /// sleep uses a high-resolution timer on Windows) and spins the last moment for
     /// even frame spacing. Motion stays smooth through the tick interpolation.
@@ -623,6 +721,10 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                if state == ElementState::Pressed && self.movie.is_some() {
+                    self.skip_movie();
+                    return;
+                }
                 if state == ElementState::Pressed {
                     if !self.grabbed {
                         self.grab(true);
@@ -637,6 +739,12 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+                if event.state == ElementState::Pressed && self.movie.is_some() {
+                    if !event.repeat {
+                        self.skip_movie();
+                    }
+                    return;
+                }
                 if event.state == ElementState::Pressed {
                     if !event.repeat {
                         match code {

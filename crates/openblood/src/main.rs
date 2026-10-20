@@ -7,6 +7,7 @@ mod cdaudio;
 mod config;
 mod hud;
 mod menu;
+mod movie;
 mod scale;
 mod tools;
 
@@ -141,7 +142,11 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     let show_menu = !direct_map;
+    let data_dir = res.dir.clone();
     let mut app = app::App::new(cfg, res, game, levels, level_index);
     app.menu_open = show_menu;
+    if show_menu {
+        app.queue_movies(movie::intro(&data_dir));
+    }
     event_loop.run_app(&mut app).expect("run");
 }

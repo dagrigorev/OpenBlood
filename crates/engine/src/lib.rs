@@ -8,4 +8,5 @@ pub mod map;
 pub mod palette;
 pub mod render;
 pub mod rff;
+pub mod smk;
 pub mod voxel;

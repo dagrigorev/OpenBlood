@@ -50,7 +50,7 @@ pub fn shot(args: &[String]) {
     cam.z = if args.len() > 11 {
         args[9].parse().unwrap()
     } else {
-        fz - 0x2c00 as f64
+        fz - ob_game::player::EYE_STAND
     };
     let sprites: Vec<SpriteDraw> = map
         .sprites
@@ -233,7 +233,7 @@ pub fn run_tool(args: &[String]) -> bool {
                 cam.ang = p[3];
                 cam.sector = ob_engine::geom::update_sector(&g.world.sectors, &g.world.walls, cam.x, cam.y, -1);
                 let (_, f) = g.world.zs_at(cam.sector.max(0) as usize, cam.x, cam.y);
-                cam.z = if p[2] != 0.0 { p[2] } else { f - 0x2c00 as f64 };
+                cam.z = if p[2] != 0.0 { p[2] } else { f - ob_game::player::EYE_STAND };
             }
             if let Some(e) = std::env::var("OB_EYE").ok().and_then(|v| v.parse::<f64>().ok()) {
                 cam.z = g.player.z - e;
@@ -332,6 +332,12 @@ pub fn run_tool(args: &[String]) -> bool {
                 Ok(n) => println!("extracted {n} audio tracks"),
                 Err(e) => eprintln!("extract failed: {e}"),
             }
+            // Cutscenes from the disc's MOVIE folder, next to the music (OUTDIR/../movie).
+            let movies = std::path::Path::new(&args[3]).parent().unwrap_or(std::path::Path::new(".")).join("movie");
+            match crate::cdaudio::extract_dir(std::path::Path::new(&args[2]), "MOVIE", &movies) {
+                Ok(names) => println!("extracted {} cutscene files to {}", names.len(), movies.display()),
+                Err(e) => eprintln!("no cutscenes extracted: {e}"),
+            }
         }
         Some("sheet") => {
             // Contact sheet of tiles A..B (each cell 64x64 scaled, labelled order left-to-right).
@@ -411,7 +417,7 @@ pub fn run_tool(args: &[String]) -> bool {
                     continue;
                 };
                 let p = &g.player;
-                let (ex, ey, ez) = (p.x, p.y, p.z - 0x2c00 as f64);
+                let (ex, ey, ez) = (p.x, p.y, p.z - ob_game::player::EYE_STAND);
                 for (i, s) in g.world.sprites.iter().enumerate() {
                     let v = res.tiles.get(s.picnum as i32).anm.view;
                     if !(v == 6 || v == 7) || res.voxel_for_tile(s.picnum as i32).is_none() || s.statnum == 1024 {
@@ -456,7 +462,7 @@ pub fn run_tool(args: &[String]) -> bool {
             for e in res.blood.entries.iter().filter(|e| e.ext == "MAP") {
                 let Ok(g) = ob_game::game::Game::load_level(&res, &e.name) else { continue };
                 let p = &g.player;
-                let (ex, ey, ez) = (p.x, p.y, p.z - 0x2c00 as f64);
+                let (ex, ey, ez) = (p.x, p.y, p.z - ob_game::player::EYE_STAND);
                 for (i, s) in g.world.sprites.iter().enumerate() {
                     if s.statnum == 1024 || !ob_game::dudes::is_dude(s.lotag) {
                         continue;
@@ -723,6 +729,29 @@ pub fn run_tool(args: &[String]) -> bool {
                     phases[0], phases[1], phases[2], phases[3], r.stats_kinds
                 );
             }
+        }
+        Some("extract-movies") => {
+            // openblood extract-movies DISC.cue OUTDIR : copies the disc's MOVIE folder.
+            match crate::cdaudio::extract_dir(std::path::Path::new(&args[2]), "MOVIE", std::path::Path::new(&args[3])) {
+                Ok(names) => println!("extracted: {}", names.join(", ")),
+                Err(e) => eprintln!("extract failed: {e}"),
+            }
+        }
+        Some("smk-frames") => {
+            // openblood smk-frames FILE.SMK OUTDIR [STEP] : every STEP-th frame as PNG.
+            let data = std::fs::read(&args[2]).expect("read");
+            let mut v = ob_engine::smk::Smk::parse(data).expect("smacker");
+            let step: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+            println!("{}x{} {} frames, {:.1} ms/frame", v.width, v.height, v.frames, v.frame_ms);
+            let t0 = std::time::Instant::now();
+            while v.next_frame().expect("decode") {
+                let n = v.position() - 1;
+                if n % step == 0 {
+                    let out = std::path::Path::new(&args[3]).join(format!("f{n:04}.png"));
+                    save_png(out.to_str().unwrap(), v.width, v.height, &v.pixels());
+                }
+            }
+            println!("decoded in {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
         }
         Some("vox-test") => {
             // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).

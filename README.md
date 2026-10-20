@@ -64,16 +64,23 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 - Tuned against recorded DOSBox fights: axe-zombie speed, damage and swing rate, damage
   scaling by difficulty, shotgun-cultist blast, tommy-gun fire rate.
 
+**Cutscenes**
+
+- Clean-room Smacker (`.SMK`) video decoder. The Monolith and GT Interactive intro plays at
+  startup, and the episode cutscenes play where BLOOD.INI places them (CutSceneA on entering
+  its level, CutSceneB when an episode ends), with their WAV soundtracks. Any key skips.
+
 **Saving**
 
 - Quick save and five slots, deterministic restore of the whole game state.
   (Saves from older OpenBlood versions can't be loaded after a save-format change.)
 
-Not yet: multiplayer, MIDI music fallback, cut-scene playback, the full set of enemy
-behaviours, health/damage measurements for most enemies.
+Not yet: multiplayer, MIDI music fallback, the full set of enemy behaviours, health/damage
+measurements for most enemies.
 
-Known differences: the vertical proportions and eye height still differ slightly from the
-original in some views (most visible in the E1M1 starting coffin); this is being investigated.
+Known differences: the E1M1 starting coffin still looks different above the coffin walls
+(a room-over-room view); eye height and vertical proportions elsewhere were fitted to
+screenshots of the original and now match closely.
 
 ## Setup
 
@@ -81,8 +88,9 @@ original in some views (most visible in the E1M1 starting coffin); this is being
 2. Copy these files from the Blood directory next to `openblood.exe` (or set `data_dir` in
    `openblood.ini`): `BLOOD.RFF`, `SOUNDS.RFF`, `GUI.RFF`, `TILES000.ART`…`TILES017.ART`,
    `SURFACE.DAT`, `VOXEL.DAT`, `TABLES.DAT`, `BLOOD.INI`.
-3. Optional music: rip the CD audio tracks from your disc image:
-   `openblood extract-cd BLOODCD1.cue music`
+3. Optional music and cutscenes: rip the CD audio tracks and copy the cutscene videos from
+   your disc image: `openblood extract-cd BLOODCD1.cue music` (music to `music/`, cutscenes
+   to `movie/`; `openblood extract-movies BLOODCD1.cue movie` copies only the videos).
 4. Run `openblood.exe` (fullscreen at native resolution by default).
 
 Command line: `--windowed`, `--map E1M1`, `--data <dir>`, `--scale 0.5`, `--maxfps 60`, `--nosound`.

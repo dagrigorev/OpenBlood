@@ -50,7 +50,6 @@ struct Channel {
     radius: (f64, f64),
     base: f32,
     looping: bool,
-    #[allow(dead_code)]
     owner: i64,
 }
 
@@ -62,7 +61,12 @@ struct Mixer {
     /// Streamed interleaved stereo 44.1 kHz music.
     music: Option<MusicStream>,
     music_vol: f32,
+    /// A cutscene is playing: level music is silent.
+    movie: bool,
 }
+
+/// Channel owner id of cutscene soundtracks.
+pub const MOVIE_OWNER: i64 = -1000;
 
 /// Music arriving in chunks from a reader thread ([`crate::cdaudio::stream_wav`]).
 struct MusicStream {
@@ -105,7 +109,7 @@ impl Mixer {
         for s in out.iter_mut() {
             *s *= self.master;
         }
-        if let Some(ms) = &mut self.music {
+        if let Some(ms) = self.music.as_mut().filter(|_| !self.movie) {
             let step = 44100.0 / self.out_rate;
             let vol = self.music_vol / 32768.0;
             'frames: for f in 0..frames {
@@ -271,8 +275,44 @@ impl Audio {
         });
     }
 
+    /// Stops game sounds (a playing cutscene soundtrack keeps going).
     pub fn stop_all(&mut self) {
-        self.mixer.lock().unwrap().channels.clear();
+        self.mixer.lock().unwrap().channels.retain(|c| c.owner == MOVIE_OWNER);
+    }
+
+    /// Plays a cutscene soundtrack (unsigned 8-bit mono PCM) and turns the music off until
+    /// [`Audio::stop_movie`].
+    pub fn play_movie_sound(&mut self, samples: Vec<u8>, rate: u32) {
+        let snd = Arc::new(Sound {
+            samples,
+            rate,
+            loop_start: None,
+            volume: 1.0,
+            pitch: 1.0,
+        });
+        let mut m = self.mixer.lock().unwrap();
+        m.channels.retain(|c| c.owner != MOVIE_OWNER);
+        let step = rate as f64 / m.out_rate;
+        m.channels.push(Channel {
+            sound: snd,
+            pos: 0.0,
+            step,
+            vol_l: 0.9,
+            vol_r: 0.9,
+            at: None,
+            radius: (1.0, 2.0),
+            base: 0.9,
+            looping: false,
+            owner: MOVIE_OWNER,
+        });
+        m.movie = true;
+    }
+
+    /// Stops the cutscene soundtrack and brings the music back.
+    pub fn stop_movie(&mut self) {
+        let mut m = self.mixer.lock().unwrap();
+        m.channels.retain(|c| c.owner != MOVIE_OWNER);
+        m.movie = false;
     }
 
     fn start_level(&mut self, res: &Resources, game: &Game) {
