@@ -1,5 +1,19 @@
 # OpenBlood
 
+[![CI](https://github.com/dagrigorev/OpenBlood/actions/workflows/ci.yml/badge.svg)](https://github.com/dagrigorev/OpenBlood/actions/workflows/ci.yml)
+[![Release](https://github.com/dagrigorev/OpenBlood/actions/workflows/release.yml/badge.svg)](https://github.com/dagrigorev/OpenBlood/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/dagrigorev/OpenBlood?sort=date)](https://github.com/dagrigorev/OpenBlood/releases/latest)
+[![Wiki](https://img.shields.io/badge/docs-wiki-red)](https://github.com/dagrigorev/OpenBlood/wiki)
+[![API docs](https://img.shields.io/badge/docs-rustdoc-blue)](https://dagrigorev.github.io/OpenBlood/)
+
+**[Download](https://github.com/dagrigorev/OpenBlood/releases/latest)** ·
+**[Wiki](https://github.com/dagrigorev/OpenBlood/wiki)** ·
+**[Installation](https://github.com/dagrigorev/OpenBlood/wiki/Installation)** ·
+**[Architecture](https://github.com/dagrigorev/OpenBlood/wiki/Architecture)** ·
+**[API docs](https://dagrigorev.github.io/OpenBlood/)**
+
+![E3M1](screenshots/map_e3m1.png)
+
 An open-source engine, written from scratch in Rust, that plays **Blood (1997)** on modern
 Windows PCs at any resolution — including 4K — using the data files from **your own copy**
 of the game.
@@ -130,7 +144,7 @@ Everything changed in the Options menu is saved to `openblood.ini` next to the e
 | Render Scale | `render_scale` | 0.25 – 1.0 (lower = faster, blurrier) |
 | Upscale | `upscale` | `nearest` (blocky), `smooth` (bilinear), `sharp` (crisp pixels, clean edges; default) |
 | Anti-aliasing | `antialias` | 0 = off, 1 = 2x, 2 = 4x supersampling (4x costs about four times the rendering) |
-| Max FPS | `max_fps` | 0 = unlimited, 60 / 120 / 144 / 240 � caps the frame rate with even frame pacing, saving CPU power and heat; motion stays smooth |
+| Max FPS | `max_fps` | 0 = unlimited, 60 / 120 / 144 / 240 — caps the frame rate with even frame pacing, saving CPU power and heat; motion stays smooth |
 | Mouse Speed | `mouse_sensitivity` | 0.05 – 3.0 |
 | Always Run | `always_run` | 0 / 1 |
 | Music | `music` | 0 / 1 |
@@ -156,7 +170,11 @@ Credits:
 
 ## Levels
 
-Some levels (work in progress):
+Some levels (work in progress; more in the [Screenshots](https://github.com/dagrigorev/OpenBlood/wiki/Screenshots) wiki page):
+
+![E1M4](screenshots/map_e1m4.png)
+
+![E2M4](screenshots/map_e2m4.png)
 
 ![lvl2](screenshots/episode2.png)
 
@@ -184,14 +202,24 @@ Developer tools (`openblood <tool> ...`):
 - Data: `rff-list`, `rff-extract`, `map-info`, `walls`, `sprites`, `chan`, `tile`, `sheet`,
   `qav`, `survey`, `find-vox`, `vox-test`, `extract-cd`.
 - Rendering: `shot` / `shotg` (render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera
-  at a sprite, `OB_CAM=x,y,z,ang` places it, `OB_ACT=1` starts the level, `YSTRETCH=` overrides
-  the vertical scale), `menu-shot` (options screen), `scale-test` (upscale filters and AA).
+  at a sprite, `OB_CAM=x,y,z,ang` places it, `OB_ACT=1` starts the level, `OB_NOMSG=1` hides the
+  sample pickup message, `YSTRETCH=` overrides the vertical scale), `menu-shot` (options screen), `scale-test` (upscale filters and AA).
 - Performance: `perf DATA MAP [W H]` (simulation and per-phase render times for the first
   seconds; `OB_SECS=n` for longer runs). In the game, `OB_PROFILE=1` logs every frame slower
   than 12 ms with a per-stage breakdown to `openblood-profile.log`, and `OB_AUTOSWITCH=n`
   moves to the next level every n seconds.
 - Analysis: `dude-visible` / `dude-near` (enemies near map starts), `noise-test` (who answers
   gunfire), `topdown` (top-down map image), `frozen-slides` (slide sectors kept still).
+
+## Releases and CI
+
+Every push to `master` builds and tests Windows and Linux packages; a maintainer approves the
+build before it is published as a GitHub release, and the wiki's
+[Releases](https://github.com/dagrigorev/OpenBlood/wiki/Releases) page updates itself. Pull
+requests run formatting, lint, test and rustdoc checks. Details:
+[CI and Releases](https://github.com/dagrigorev/OpenBlood/wiki/CI-and-Releases).
+
+The wiki is generated from the [`wiki/`](wiki) folder; edit pages there.
 
 ## License
 

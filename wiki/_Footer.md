@@ -1,0 +1,1 @@
+OpenBlood is MIT licensed and contains no Blood game content. Blood is © 1997 Monolith Productions. This wiki is generated from the [`wiki/` folder](https://github.com/dagrigorev/OpenBlood/tree/master/wiki); edit it there.

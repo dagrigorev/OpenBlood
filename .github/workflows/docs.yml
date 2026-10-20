@@ -1,0 +1,105 @@
+# Publishes the API documentation (rustdoc) to GitHub Pages and mirrors the
+# wiki/ folder into the GitHub wiki whenever master changes.
+name: Docs and wiki
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "wiki/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/scripts/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rustdoc:
+    name: Build API docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux audio headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs
+
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps --document-private-items --locked
+
+      - name: Landing page
+        run: |
+          cat > target/doc/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>OpenBlood API docs</title>
+            <style>
+              body { font: 16px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; background: #111; color: #ddd; }
+              a { color: #e05050; } h1 { color: #fff; } li { margin: .5rem 0; }
+            </style>
+          </head>
+          <body>
+            <h1>OpenBlood API documentation</h1>
+            <p>Generated from the source on every push to <code>master</code>.</p>
+            <ul>
+              <li><a href="ob_engine/index.html">ob_engine</a> &mdash; data formats, geometry, collision, software renderer, Smacker decoder</li>
+              <li><a href="ob_game/index.html">ob_game</a> &mdash; Blood game logic: world, player, weapons, enemies, triggers, saves</li>
+              <li><a href="openblood/index.html">openblood</a> &mdash; executable: window, input, audio, HUD, menus, scaling, developer tools</li>
+            </ul>
+            <p><a href="https://github.com/dagrigorev/OpenBlood/wiki">Wiki</a> &middot; <a href="https://github.com/dagrigorev/OpenBlood">Repository</a></p>
+          </body>
+          </html>
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy-docs:
+    name: Deploy API docs
+    needs: rustdoc
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  wiki:
+    name: Sync wiki
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: wiki
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sync wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/sync-wiki.sh wiki

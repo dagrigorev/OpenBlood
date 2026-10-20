@@ -1,0 +1,176 @@
+# Builds OpenBlood on every push to master, waits for a maintainer's approval
+# (the `release` environment has required reviewers), then publishes a GitHub
+# release and refreshes the wiki's Releases page.
+name: Release
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "wiki/**"
+      - "**/*.md"
+      - "screenshots/**"
+      - "LICENSE-MIT"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/docs.yml"
+      - ".github/dependabot.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Version and notes
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)
+          tag="v${version}.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${tag}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write release notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          range="${prev:+${prev}..}HEAD"
+          {
+            echo "OpenBlood ${TAG}, built from ${GITHUB_SHA::7}."
+            echo
+            echo "**You need the data files from your own copy of Blood (1997).** OpenBlood ships no game content."
+            echo "See the [installation guide](https://github.com/${GITHUB_REPOSITORY}/wiki/Installation)."
+            echo
+            echo "**Changes${prev:+ since ${prev}}**"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "${range}" | head -n 100
+          } > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            bin: openblood.exe
+          - name: linux-x64
+            os: ubuntu-latest
+            bin: openblood
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux audio headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.name }}
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: bash
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          name="openblood-${TAG}-${{ matrix.name }}"
+          mkdir -p "dist/${name}"
+          cp "target/release/${{ matrix.bin }}" README.md LICENSE-MIT "dist/${name}/"
+          cd dist
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            7z a -tzip "${name}.zip" "${name}" > /dev/null
+          else
+            tar -czf "${name}.tar.gz" "${name}"
+          fi
+          rm -rf "${name}"
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    # Required reviewers on this environment hold the job until a maintainer approves.
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum openblood-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release create "${TAG}" dist/openblood-* dist/SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "OpenBlood ${TAG}" \
+            --notes-file dist/release-notes.md
+
+  wiki:
+    name: Update wiki Releases page
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: wiki
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sync wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/sync-wiki.sh wiki
