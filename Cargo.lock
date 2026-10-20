@@ -1320,6 +1320,7 @@ dependencies = [
  "ob-engine",
  "ob-game",
  "png",
+ "rayon",
  "softbuffer",
  "winit",
 ]

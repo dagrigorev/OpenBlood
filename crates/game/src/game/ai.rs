@@ -18,6 +18,9 @@ pub fn is_statue(t: i16) -> bool {
     matches!(t, 208 | 209)
 }
 
+/// Idle dudes only wander while the player is beyond their sight range.
+const WANDER_DISTANCE: f64 = 12000.0;
+
 /// Distance at which ranged attackers stop advancing and start strafing.
 const KEEP_DISTANCE: f64 = 2600.0;
 
@@ -68,6 +71,7 @@ impl Game {
                 }
                 Ai::Rise | Ai::Attack | Ai::Recoil => self.dude_gravity(i, &info, dt),
                 Ai::Idle => {
+                    self.idle_wander(res, i, &info, dist, dt);
                     if self.player.dead || dist > 12000.0 || (self.clock as usize + i) % 15 != 0 {
                         continue;
                     }
@@ -215,6 +219,56 @@ impl Game {
                 && (o.z - z).abs() < 0x3000
                 && dude_info(o.lotag).is_some_and(|oi| into(o.x as f64, o.y as f64, info.radius + oi.radius))
         })
+    }
+
+    /// Unalerted dudes don't stand frozen: they take a few slow steps around their spawn
+    /// point, pause, and wander again. Ambushers, statues and sleepers stay put.
+    fn idle_wander(&mut self, res: &Resources, i: usize, info: &DudeInfo, dist: f64, dt: f64) {
+        if info.speed <= 0.0 || info.flying || self.holds_position(i) {
+            return;
+        }
+        // Close to the player: stand and face the way the map placed us (sight checks
+        // look along the facing).
+        if dist < WANDER_DISTANCE {
+            if self.world.rt[i].ai_state == 1 {
+                self.world.rt[i].ai_state = 0;
+                self.world.rt[i].ai_timer = 0;
+                self.world.sprites[i].ang = self.world.rt[i].home_ang;
+                self.play_dude_anim(res, i, "I1");
+            }
+            return;
+        }
+        let rt = &mut self.world.rt[i];
+        rt.ai_timer -= 1;
+        if rt.ai_timer <= 0 {
+            if rt.ai_state == 1 {
+                // Pause.
+                self.world.rt[i].ai_state = 0;
+                self.world.rt[i].ai_timer = (TICK_RATE * (1.0 + (self.rand() % 200) as f64 / 100.0)) as i32;
+                self.play_dude_anim(res, i, "I1");
+            } else {
+                // Walk a short way: back toward home when strayed, else somewhere nearby.
+                let s = &self.world.sprites[i];
+                let (hx, hy, _) = self.world.base_sprite_xy.get(i).copied().unwrap_or((s.x, s.y, s.z));
+                let (dx, dy) = ((hx - s.x) as f64, (hy - s.y) as f64);
+                let a = if dx.hypot(dy) > 384.0 {
+                    dy.atan2(dx)
+                } else {
+                    (self.rand() % 360) as f64 / 180.0 * std::f64::consts::PI
+                };
+                self.world.sprites[i].ang = ((a.to_degrees() / 360.0 * 2048.0).rem_euclid(2048.0)) as i16;
+                self.world.rt[i].ai_state = 1;
+                self.world.rt[i].ai_timer = (TICK_RATE * (0.5 + (self.rand() % 70) as f64 / 100.0)) as i32;
+                self.play_dude_anim(res, i, "M1");
+            }
+        }
+        if self.world.rt[i].ai_state == 1 {
+            let a = ob_engine::geom::ang_to_rad(self.world.sprites[i].ang as f64);
+            if !self.dude_walk(i, info, a, info.speed * 0.25 * dt) {
+                self.world.rt[i].ai_timer = 0;
+            }
+        }
+        self.dude_gravity(i, info, dt);
     }
 
     /// Running away from the player (innocents, burning dudes).

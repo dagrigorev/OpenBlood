@@ -393,16 +393,28 @@ pub fn font_base(n: i32) -> i32 {
     4096 + 96 * n
 }
 
+/// Glyph tile for `c` in `font`, falling back to other Blood fonts when the font lacks it
+/// (the big menu font has no digits or punctuation). Returns (tile, y offset to keep the
+/// glyph on the same baseline).
+fn font_glyph(res: &Resources, font: i32, c: char) -> Option<(i32, f64)> {
+    let idx = (c as i32 - 32).clamp(0, 95);
+    let height = |f: i32| res.tiles.get(font_base(f) + ('A' as i32 - 32)).height as f64;
+    for f in [font, 1, 0, 3, 4] {
+        let pic = font_base(f) + idx;
+        if !res.tiles.get(pic).is_empty() {
+            let dy = if f == font { 0.0 } else { (height(font) - height(f)).max(0.0) };
+            return Some((pic, dy));
+        }
+    }
+    None
+}
+
 /// Width in virtual pixels of `text` in font `n`.
 pub fn tile_text_width(res: &Resources, font: i32, text: &str, zoom: f64) -> f64 {
     text.chars()
-        .map(|c| {
-            let t = res.tiles.get(font_base(font) + (c as i32 - 32).clamp(0, 95));
-            if t.is_empty() {
-                6.0
-            } else {
-                t.width as f64 + 1.0
-            }
+        .map(|c| match font_glyph(res, font, c).filter(|_| c != ' ') {
+            Some((pic, _)) => res.tiles.get(pic).width as f64 + 1.0,
+            None => 6.0,
         })
         .sum::<f64>()
         * zoom
@@ -427,14 +439,12 @@ pub fn tile_text(
 ) -> f64 {
     let mut x = vx;
     for c in text.chars() {
-        let pic = font_base(font) + (c as i32 - 32).clamp(0, 95);
-        let t = res.tiles.get(pic);
-        if c == ' ' || t.is_empty() {
+        let Some((pic, dy)) = font_glyph(res, font, c).filter(|_| c != ' ') else {
             x += 6.0 * zoom;
             continue;
-        }
-        vtile(frame, w, h, res, luts, pic, x, vy, anchor, zoom, shade, pal);
-        x += (t.width as f64 + 1.0) * zoom;
+        };
+        vtile(frame, w, h, res, luts, pic, x, vy + dy * zoom, anchor, zoom, shade, pal);
+        x += (res.tiles.get(pic).width as f64 + 1.0) * zoom;
     }
     x - vx
 }

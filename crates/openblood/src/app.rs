@@ -445,15 +445,15 @@ impl App {
         } else {
             // Nearest-neighbour upscale from the render resolution.
             let src = &self.renderer.frame;
+            use rayon::prelude::*;
             let xmap: Vec<usize> = (0..ww).map(|x| (x * rw / ww).min(rw - 1)).collect();
-            for y in 0..wh {
+            buf.par_chunks_mut(ww).enumerate().for_each(|(y, out)| {
                 let sy = (y * rh / wh).min(rh - 1);
                 let row = &src[sy * rw..sy * rw + rw];
-                let out = &mut buf[y * ww..y * ww + ww];
                 for (o, &sx) in out.iter_mut().zip(xmap.iter()) {
                     *o = row[sx];
                 }
-            }
+            });
         }
         let _ = buf.present();
 

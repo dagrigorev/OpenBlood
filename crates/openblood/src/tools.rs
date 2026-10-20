@@ -294,6 +294,9 @@ pub fn run_tool(args: &[String]) -> bool {
                 ror: &g.world.ror_view,
             };
             let mut r = Renderer::new(w, h);
+            if let Ok(v) = std::env::var("YSTRETCH") {
+                r.y_stretch = v.parse().unwrap();
+            }
             r.render(&scene, &cam);
             let t0 = std::time::Instant::now();
             for _ in 0..10 {
@@ -599,6 +602,25 @@ pub fn run_tool(args: &[String]) -> bool {
                     println!("{}: frozen {:?} of {total} slide sectors", e.name, f);
                 }
             }
+        }
+        Some("menu-shot") => {
+            // openblood menu-shot DATA OUT.png : options menu rendered at 640x400.
+            let res = Resources::load(&args[2]).expect("load");
+            let luts = res.build_luts(0);
+            let mut m = crate::menu::Menu::new();
+            m.screen = crate::menu::Screen::Options;
+            let o = crate::menu::OptionsView {
+                fullscreen: false,
+                scale: 0.5,
+                mouse: 0.35,
+                always_run: true,
+                music: true,
+                slots: vec![None; 5],
+            };
+            let (w, h) = (640, 400);
+            let mut frame = vec![0u32; w * h];
+            m.draw(&mut frame, w, h, &res, &luts, 0.0, &o);
+            save_png(&args[3], w, h, &frame);
         }
         Some("vox-test") => {
             // openblood vox-test DATA PIC OUT.png ANG : voxel (left) next to the flat tile (right).

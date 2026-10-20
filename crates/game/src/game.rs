@@ -104,6 +104,10 @@ pub struct Game {
     sees: Vec<bool>,
     /// Damage currently being applied comes from burning.
     burn_kill: bool,
+    /// Sprite positions and player eye before the last tick, for drawing frames between
+    /// ticks (smooth motion at any frame rate).
+    prev_xyz: Vec<(i32, i32, i32)>,
+    prev_eye: (f64, f64, f64),
     /// The level-start channel has been broadcast.
     pub started: bool,
 }
@@ -192,6 +196,8 @@ impl Game {
             provoked: vec![false; n],
             sees: vec![false; n],
             burn_kill: false,
+            prev_xyz: Vec::new(),
+            prev_eye: (0.0, 0.0, 0.0),
             started: false,
         };
         // The level-start broadcast is sent on the player's first input (see `tick`).
@@ -206,6 +212,13 @@ impl Game {
                         info.health
                     };
                     g.total_kills += if s.lotag == 245 { 0 } else { 1 };
+                    // Maps store the sprite as drawn; the game keeps dude z at the feet.
+                    if s.cstat & 48 == 0 {
+                        let (top, bot) = sprite_extents(res, s);
+                        g.world.sprites[i].z = bot.round() as i32;
+                        g.world.rt[i].eye = ((bot - top) * 0.85) as i32;
+                    }
+                    g.world.rt[i].home_ang = g.world.sprites[i].ang;
                     g.play_dude_anim(res, i, "I1");
                     g.ai[i] = g.initial_ai(i);
                 }
@@ -250,10 +263,32 @@ impl Game {
                 inp.look = 0.0;
             }
             first = false;
+            self.snapshot();
             self.tick(res, &inp, step);
         }
         self.damage_flash = (self.damage_flash - dt * 2.0).max(0.0);
         self.pickup_flash = (self.pickup_flash - dt * 3.0).max(0.0);
+    }
+
+    fn snapshot(&mut self) {
+        self.prev_xyz.clear();
+        self.prev_xyz.extend(self.world.sprites.iter().map(|s| (s.x, s.y, s.z)));
+        self.prev_eye = (self.player.x, self.player.y, self.player.view_z());
+    }
+
+    /// Fraction of a tick elapsed since the last simulated tick.
+    fn alpha(&self) -> f64 {
+        (self.acc * TICK_RATE).clamp(0.0, 1.0)
+    }
+
+    /// Position of sprite `i` blended between the last two ticks.
+    fn draw_pos(&self, i: usize) -> (f64, f64, f64) {
+        let s = &self.world.sprites[i];
+        let cur = (s.x as f64, s.y as f64, s.z as f64);
+        match self.prev_xyz.get(i) {
+            Some(&(x, y, z)) => lerp3((x as f64, y as f64, z as f64), cur, self.alpha()),
+            None => cur,
+        }
     }
 
     fn obstacles(&self) -> Vec<CircleObstacle> {
@@ -877,7 +912,12 @@ impl Game {
 
     fn can_see_player(&self, i: usize) -> bool {
         let s = &self.world.sprites[i];
-        let (sx, sy, sz) = (s.x as f64, s.y as f64, s.z as f64 - 0x2000 as f64);
+        // Dude z is at the feet; eye height comes from the sprite's size.
+        let eye = match self.world.rt[i].eye {
+            e if e > 0 => e as f64,
+            _ => crate::player::EYE_STAND,
+        };
+        let (sx, sy, sz) = (s.x as f64, s.y as f64, s.z as f64 - eye);
         let (px, py, pz) = (self.player.x, self.player.y, self.player.view_z());
         let d = (px - sx).hypot(py - sy);
         if d < 1.0 {
@@ -1662,7 +1702,7 @@ impl Game {
                 for (j, amount) in hits {
                     self.damage_sprite(res, j, amount, false);
                 }
-                self.alert_nearby(res, 6000.0);
+                self.alert_nearby(res, 10000.0); // gunshots carry far
             }
             Fire::Projectile(pk) => {
                 let ang = dy.atan2(dx);
@@ -1873,21 +1913,16 @@ impl Game {
     // ------------------------------------------------------------------ view
 
     pub fn camera(&self) -> Camera {
+        let (x, y, z) = lerp3(self.prev_eye, (self.player.x, self.player.y, self.player.view_z()), self.alpha());
         Camera {
-            x: self.player.x,
-            y: self.player.y,
-            z: self.player.view_z(),
+            x,
+            y,
+            z,
             ang: self.player.ang,
             // Blood's view centre sits 10 lines above the screen centre. The renderer's
             // horiz grows downward while the player's grows upward (look up = positive).
             horiz: 10.0 - self.player.horiz,
-            sector: ob_engine::geom::update_sector(
-                &self.world.sectors,
-                &self.world.walls,
-                self.player.x,
-                self.player.y,
-                self.player.sector,
-            ),
+            sector: ob_engine::geom::update_sector(&self.world.sectors, &self.world.walls, x, y, self.player.sector),
         }
     }
 
@@ -1909,7 +1944,7 @@ impl Game {
     /// Builds the renderer sprite list, resolving rotation frames for the camera.
     pub fn sprite_draws(&self, res: &Resources, cam: &Camera) -> Vec<SpriteDraw> {
         let mut out = Vec::with_capacity(self.world.sprites.len());
-        for s in &self.world.sprites {
+        for (i, s) in self.world.sprites.iter().enumerate() {
             if s.statnum == stat::FREE || s.cstat & SPR_INVISIBLE != 0 || s.picnum <= 0 && s.statnum != stat::DECORATION
             {
                 continue;
@@ -1943,10 +1978,18 @@ impl Game {
                     pic += k;
                 }
             }
+            let (x, y, mut z) = self.draw_pos(i);
+            // Dudes keep z at their feet; each animation frame's own offsets would otherwise
+            // sink walking frames into the floor, so the frame's bottom edge goes to z.
+            if s.statnum == stat::DUDE && s.cstat & 48 == 0 {
+                let frame = Sprite { picnum: pic as i16, ..s.clone() };
+                let (_, bot) = sprite_extents(res, &frame);
+                z -= bot - s.z as f64;
+            }
             out.push(SpriteDraw {
-                x: s.x as f64,
-                y: s.y as f64,
-                z: s.z as f64,
+                x,
+                y,
+                z,
                 picnum: pic,
                 cstat,
                 shade: s.shade as i32,
@@ -1963,4 +2006,12 @@ impl Game {
         }
         out
     }
+}
+
+/// Blends `a` toward `b`; big jumps (teleports, respawns) are not blended.
+fn lerp3(a: (f64, f64, f64), b: (f64, f64, f64), t: f64) -> (f64, f64, f64) {
+    if (b.0 - a.0).abs() > 1024.0 || (b.1 - a.1).abs() > 1024.0 || (b.2 - a.2).abs() > 0x4000 as f64 {
+        return b;
+    }
+    (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
 }

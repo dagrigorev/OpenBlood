@@ -15,7 +15,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const MAGIC: &str = "OPENBLOOD-SAVE";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct SaveGame {
@@ -152,6 +152,8 @@ impl Game {
             provoked: sg.provoked,
             sees: sg.sees,
             burn_kill: false,
+            prev_xyz: Vec::new(),
+            prev_eye: (0.0, 0.0, 0.0),
             started: true,
         };
         g.ai.resize(n, Ai::Idle);

@@ -400,3 +400,67 @@ fn e1m1_player_can_climb_out_of_coffin() {
         g.player.z
     );
 }
+
+/// Unalerted enemies wander around their spawn point instead of standing frozen, and
+/// stay on their feet (sprite bottom on the floor) while doing it.
+#[test]
+fn idle_dudes_wander_near_home() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level(&r, "E2M4").unwrap();
+    let idle = ob_game::player::Input::default();
+    let far: Vec<usize> = (0..g.world.sprites.len())
+        .filter(|&i| {
+            let s = &g.world.sprites[i];
+            matches!(s.lotag, 201 | 202)
+                && (s.x as f64 - g.player.x).hypot(s.y as f64 - g.player.y) > 20000.0
+        })
+        .collect();
+    let start: Vec<(i32, i32)> = far.iter().map(|&i| (g.world.sprites[i].x, g.world.sprites[i].y)).collect();
+    for _ in 0..60 * 6 {
+        g.update(&r, &idle, 1.0 / 60.0);
+    }
+    let mut moved = 0;
+    for (k, &i) in far.iter().enumerate() {
+        let s = &g.world.sprites[i];
+        let d = ((s.x - start[k].0) as f64).hypot((s.y - start[k].1) as f64);
+        if d > 32.0 {
+            moved += 1;
+        }
+        assert!(d < 1500.0, "dude {i} strayed {d:.0} units");
+        if g.ai_state(i) == Some(ob_game::game::Ai::Idle) && moved > 0 && d > 32.0 {
+            // A dude that walked is standing on its floor, not sunk into it.
+            let (_, f) = g.world.zs_at(s.sectnum as usize, s.x as f64, s.y as f64);
+            assert!(s.z as f64 <= f + 64.0, "dude {i} feet at {} below floor {f}", s.z);
+        }
+    }
+    assert!(moved * 2 > far.len(), "only {moved} of {} idle dudes moved", far.len());
+}
+
+/// Frames between the 120 Hz ticks are blended, so at 144 fps (a frame sees 0, 1 or 2
+/// ticks) the camera still advances evenly while walking.
+#[test]
+fn camera_moves_smoothly_between_ticks() {
+    let Some(r) = res() else { return };
+    let mut g = Game::load_level(&r, "E2M4").unwrap();
+    let walk = ob_game::player::Input {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let dt = 1.0 / 144.0;
+    for _ in 0..144 {
+        g.update(&r, &walk, dt);
+    }
+    let mut steps = Vec::new();
+    let mut last = g.camera().x;
+    for _ in 0..30 {
+        g.update(&r, &walk, dt);
+        let x = g.camera().x;
+        steps.push(x - last);
+        last = x;
+    }
+    let mean = steps.iter().sum::<f64>() / steps.len() as f64;
+    assert!(mean > 10.0, "player should be walking: {mean}");
+    for s in &steps {
+        assert!((s - mean).abs() < mean * 0.25, "uneven camera step {s:.1} vs mean {mean:.1}: {steps:?}");
+    }
+}

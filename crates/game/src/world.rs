@@ -44,6 +44,10 @@ pub struct SpriteRt {
     pub ai_timer: i32,
     pub target: i32,
     pub burn_time: i32,
+    /// Facing the dude was placed with (idle wandering turns back to it).
+    pub home_ang: i16,
+    /// Eye height above the feet (from the sprite's size), for sight checks.
+    pub eye: i32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
