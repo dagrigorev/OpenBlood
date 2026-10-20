@@ -205,12 +205,13 @@ fn walking_acceleration_matches_original() {
     assert!(ok(samples[0], 329.0) && ok(samples[1], 1027.0), "travel {samples:?}");
 }
 
-/// Reference: DOSBox recording of E4M9's start, player idle. Axe zombies land the first
-/// hit ~2.5 s in, deal 18 per hit on skill 2 (≈10 on skill 0) and kill the player by ~5.3 s.
+/// Reference: DOSBox recordings of E4M9's start, player idle. Axe zombies land the first
+/// hit ~2.5 s in and kill the player by ~5.3 s on skill 2. Damage per hit on skills 0-4:
+/// 10-11, 14-15, 18, 21-22, 26.
 #[test]
 fn axe_zombie_ambush_matches_original() {
     let Some(r) = res() else { return };
-    for (skill, per_hit) in [(2, 18), (0, 10)] {
+    for (skill, per_hit) in [(2, 18), (0, 10), (1, 15), (3, 21), (4, 26)] {
         let mut g = Game::load_level_skill(&r, "E4M9", skill).unwrap();
         let idle = ob_game::player::Input::default();
         let mut hits = Vec::new();

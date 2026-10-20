@@ -10,7 +10,11 @@
 - **E1M1 starting coffin:** the view above the coffin walls still differs (a room-over-room
   view). Eye height and vertical proportions elsewhere were fitted to screenshots of the
   original and match closely.
-- Some enemy values (cultist health, damage at difficulties 1, 3 and 4) are estimates.
+- Some enemy values are estimates: cultist health and tommy-gun cultist damage (measuring them
+  needs aimed shots at moving targets in DOSBox, which keyboard input can't do reliably).
+  Difficulty damage scaling is measured for all five skills.
+- Axe-zombie hit spacing at the E4M9 start varies between runs in both games (it depends on how
+  many zombies reach the player); single recordings are not enough to tune it further.
 - Saves are tied to the save-format version; saves from older OpenBlood builds cannot be
   loaded after a format change.
 

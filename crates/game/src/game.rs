@@ -1101,8 +1101,9 @@ impl Game {
         if self.player.dead || amount <= 0 || self.powerups.invulnerable > 0.0 {
             return;
         }
-        // Difficulty scales damage taken (measured in DOSBox: 18 on skill 2, ~10 on skill 0).
-        const SKILL_SCALE: [f64; 5] = [0.56, 0.78, 1.0, 1.25, 1.5];
+        // Difficulty scales damage taken. Measured in DOSBox (E4M9 axe-zombie hits, 18 on
+        // skill 2): 10-11, 14-15, 18, 21-22 and 26 per hit, i.e. 9/16, 13/16, 1, 19/16, 23/16.
+        const SKILL_SCALE: [f64; 5] = [0.5625, 0.8125, 1.0, 1.1875, 1.4375];
         let mut dmg = ((amount as f64 * SKILL_SCALE[self.skill.clamp(0, 4) as usize]).round() as i32).max(1);
         for a in self.player.armor.iter_mut() {
             if *a > 0 && dmg > 0 {
