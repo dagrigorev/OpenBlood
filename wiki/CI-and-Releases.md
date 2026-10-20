@@ -23,7 +23,7 @@ Runs on pull requests and pushes to branches other than `master`:
 | Job | Command |
 | --- | --- |
 | rustfmt | `cargo fmt --all -- --check` (must pass) |
-| clippy | `cargo clippy --workspace --all-targets` (warnings reported, not fatal yet) |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` (must pass) |
 | test | `cargo test --workspace` and `cargo build --release` on Windows and Linux |
 | rustdoc | `cargo doc --workspace --no-deps --document-private-items` with warnings as errors |
 

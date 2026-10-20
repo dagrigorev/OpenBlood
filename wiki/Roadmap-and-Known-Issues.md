@@ -18,7 +18,6 @@
 ## Ideas
 
 - More platforms in the release pipeline (macOS, Windows ARM64).
-- Enforcing clippy in CI once the remaining warnings are fixed.
 - More measured enemy behaviour from DOSBox recordings.
 
 Have something to add? See [Contributing](Contributing).
