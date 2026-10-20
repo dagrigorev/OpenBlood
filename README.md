@@ -9,6 +9,8 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 
 ## What works
 
+**Data and rendering**
+
 - Clean-room readers for every original data format: `RFF` archives (incl. v3.01
   dictionary/file obfuscation), `ART` tiles, 8-bit palettes and shade/translucency tables,
   encrypted v7 `MAP` files with Blood's X-sector/X-wall/X-sprite bitfields, `SEQ` sprite
@@ -16,34 +18,58 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 - Resolution-independent multithreaded software renderer (per-column portal ray casting,
   sloped floors/ceilings, parallax skies, masked/translucent walls, face/wall/floor sprites,
   8-direction sprite rotation, distance shading from the original palookups).
-  ~60+ FPS at 3840×2160 on a many-core CPU; `render_scale` trades sharpness for speed.
-- Player movement and collision (sliding, steps, jumping, crouching, gravity, fall damage).
-- Blood's trigger/channel system: doors, lifts, sliding/rotating sectors, switches, wait
-  timers, locks and keys, level-start broadcasts, teleporters, secrets, exits, messages.
+- Smooth motion at any frame rate: the game runs at a fixed 120 Hz and every frame blends
+  the camera and all sprites between the last two ticks, so 60, 144 Hz or uncapped frame
+  rates all move evenly.
+- Video options: output resolution (native by default), render scale, upscale filter
+  (Nearest / Smooth / Sharp) and supersampling anti-aliasing (2x / 4x).
 - Voxel models (KVX) for items and decorations, ray-cast per pixel, including spinning pickups.
 - Room-over-room links: see-through stacked floors/ceilings (per-pixel portal tracing) and
   moving between linked rooms, including diving into water (with the original water palette),
   with sprites in the linked room visible through the portal.
+
+**World and player**
+
+- Player movement and collision (sliding, steps, crouching, fall damage). Walking speed and
+  acceleration, jump height (0.8 s in the air) and gravity are measured from the original.
+- Blood's trigger/channel system: doors, lifts, sliding/rotating sectors, switches, wait
+  timers, locks and keys, level-start broadcasts, teleporters, secrets, exits, messages.
+  Level start fires on the player's first move, like the original.
 - Sliding/rotating sectors carry sprites and the player (boats, trains, moving platforms).
 - Sector lighting effects, ambient/sector/one-shot sounds with 3D panning, CD-audio music
   ripped from your own disc image.
+
+**Combat and enemies**
+
 - Weapons with the original QAV animations and sounds (pitchfork, flare pistol, sawed-off,
   tommy gun, napalm, dynamite, spray can, tesla, life leech, voodoo), hitscan and projectiles,
-  explosions, enemy AI with original SEQ animations and voices, pickups, the original status
-  bar art and menu fonts, episode/difficulty menus, INI-driven level progression.
+  explosions, pickups, the original status bar art and menu fonts, episode/difficulty menus,
+  INI-driven level progression.
 - Alternate fire for every weapon (double-barrel, tommy spread, flare starburst, big napalm,
   dynamite drop, spray-can bomb, tesla charge, voodoo curse), sawed-off reload, guns akimbo.
+  Shotgun pellets hitting the same target add up, so a point-blank blast gibs.
 - Inventory (doctor's bag, diving suit, jumping boots, beast vision, crystal ball) and timed
   power-ups (invisibility, invulnerability, akimbo, reflective shots, feather fall, rage),
   breathing and drowning underwater.
-- Enemy behaviours: ambush / guard / deaf editor flags, hearing gunfire, ranged enemies strafe
-  instead of walking into fire, obstacle and ledge avoidance, fleeing innocents, burning enemies,
-  buried zombies rising, stone gargoyles waking when hit or triggered.
-- Save / load: quick save and five slots, deterministic restore of the whole game state.
+- Enemy AI with original SEQ animations and voices: ambush / guard / deaf editor flags,
+  hearing gunfire, ranged enemies strafe instead of walking into fire, obstacle and ledge
+  avoidance, enemies don't walk through each other, fleeing innocents, burning enemies,
+  buried zombies rising, stone gargoyles waking when hit or triggered. Enemies stand on their
+  feet in every animation frame; unalerted enemies far from the player wander around their
+  post instead of standing frozen.
+- Tuned against recorded DOSBox fights: axe-zombie speed, damage and swing rate, damage
+  scaling by difficulty, shotgun-cultist blast, tommy-gun fire rate.
 
-Not yet: multiplayer, MIDI music fallback, cut-scene playback, the full set of enemy behaviours.
-Known difference: the E1M1 starting coffin room looks vertically shorter in the original;
-the cause is still being investigated.
+**Saving**
+
+- Quick save and five slots, deterministic restore of the whole game state.
+  (Saves from older OpenBlood versions can't be loaded after a save-format change.)
+
+Not yet: multiplayer, MIDI music fallback, cut-scene playback, the full set of enemy
+behaviours, health/damage measurements for most enemies.
+
+Known differences: the vertical proportions and eye height still differ slightly from the
+original in some views (most visible in the E1M1 starting coffin); this is being investigated.
 
 ## Setup
 
@@ -53,19 +79,55 @@ the cause is still being investigated.
    `SURFACE.DAT`, `VOXEL.DAT`, `TABLES.DAT`, `BLOOD.INI`.
 3. Optional music: rip the CD audio tracks from your disc image:
    `openblood extract-cd BLOODCD1.cue music`
-4. Run `openblood.exe` (fullscreen at native resolution by default; `--windowed` for a window).
+4. Run `openblood.exe` (fullscreen at native resolution by default).
+
+Command line: `--windowed`, `--map E1M1`, `--data <dir>`, `--scale 0.5`, `--nosound`.
+
+**Tip for E1M1:** you start lying in a coffin. Move once (the coffin floor rises), then jump
+(Space) while walking forward to climb over its edge into the crypt.
 
 ## Controls
 
-WASD / arrows move, mouse looks, left mouse or F fires, E / Enter uses, Space jumps,
-C / Ctrl crouches, Shift runs, 1–0 select weapons, Esc menu, F11 or Alt+Enter fullscreen,
-F5 render scale, F12 screenshot, F2 stats, `[` / `]` previous / next level.
+| Action | Keys |
+| --- | --- |
+| Move | W A S D / arrows |
+| Look | mouse (mouse up = look up), PgUp / PgDn |
+| Fire / alternate fire | left mouse or F / right mouse |
+| Use, open doors | E |
+| Jump / crouch / run | Space / C or Ctrl / Shift |
+| Weapons | 1 – 0 |
+| Inventory: previous / next / use | `[` / `]` / Enter |
+| Quick save / quick load | F6 / F9 |
+| Menu | Esc |
+| Fullscreen | F11 or Alt+Enter |
+| Toggle render scale (100% / 50%) | F5 |
+| Screenshot / stats | F12 / F2 |
+| Previous / next level | Ctrl+`[` / Ctrl+`]` |
+| Test cheat (all weapons, ammo, keys) | F10 |
 
 ![help](screenshots/help.png)
 
+## Options and `openblood.ini`
+
+Everything changed in the Options menu is saved to `openblood.ini` next to the executable.
+
+| Option | ini key | Values |
+| --- | --- | --- |
+| Fullscreen | `fullscreen` | 0 / 1 |
+| Resolution | `resolution` | `native` (window size, default) or e.g. `1920x1080`; other aspect ratios are letterboxed, sizes above the window are averaged down |
+| Render Scale | `render_scale` | 0.25 – 1.0 (lower = faster, blurrier) |
+| Upscale | `upscale` | `nearest` (blocky), `smooth` (bilinear), `sharp` (crisp pixels, clean edges; default) |
+| Anti-aliasing | `antialias` | 0 = off, 1 = 2x, 2 = 4x supersampling (4x costs about four times the rendering) |
+| Mouse Speed | `mouse_sensitivity` | 0.05 – 3.0 |
+| Always Run | `always_run` | 0 / 1 |
+| Music | `music` | 0 / 1 |
+
+Other keys: `data_dir`, `window_width`, `window_height`, `invert_mouse`, `sound`, `volume`,
+`music_volume`, `skill`, `start_map`.
+
 ## Interface
 
-Almost clone one by one
+Almost a one-to-one clone of the original menus.
 
 Main menu:
 
@@ -81,13 +143,11 @@ Credits:
 
 ## Levels
 
-Here is some levels (not done yet)
+Some levels (work in progress):
 
 ![lvl2](screenshots/episode2.png)
 
 ![lvl22](screenshots/episode2_2.png)
-
-also, enemies positioning not completely ready 
 
 ![lvl3](screenshots/episode3.png)
 
@@ -99,12 +159,22 @@ cargo test                     # unit tests
 OPENBLOOD_DATA=path/to/blood cargo test --release   # + tests against your original files
 ```
 
-Crates: `ob-engine` (formats, geometry, collision, renderer), `ob-game` (Blood game logic),
-`openblood` (window, input, audio, HUD, menus, developer tools).
+The tests against the original files include reference behaviour measured in DOSBox:
+movement acceleration, the E4M9 axe-zombie ambush, shotgun and tommy-gun fights, climbing out
+of the E1M1 coffin, smooth camera motion between ticks and idle enemies wandering.
 
-Developer tools (`openblood <tool> ...`): `rff-list`, `rff-extract`, `map-info`, `walls`,
-`sprites`, `chan`, `tile`, `sheet`, `qav`, `survey`, `find-vox`, `vox-test`, `shot` / `shotg`
-(render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera at a sprite), `extract-cd`.
+Crates: `ob-engine` (formats, geometry, collision, renderer), `ob-game` (Blood game logic),
+`openblood` (window, input, audio, HUD, menus, scaling, developer tools).
+
+Developer tools (`openblood <tool> ...`):
+
+- Data: `rff-list`, `rff-extract`, `map-info`, `walls`, `sprites`, `chan`, `tile`, `sheet`,
+  `qav`, `survey`, `find-vox`, `vox-test`, `extract-cd`.
+- Rendering: `shot` / `shotg` (render a map to PNG; `OB_LOOKAT=sprite,dist` aims the camera
+  at a sprite, `OB_CAM=x,y,z,ang` places it, `OB_ACT=1` starts the level, `YSTRETCH=` overrides
+  the vertical scale), `menu-shot` (options screen), `scale-test` (upscale filters and AA).
+- Analysis: `dude-visible` / `dude-near` (enemies near map starts), `noise-test` (who answers
+  gunfire), `topdown` (top-down map image), `frozen-slides` (slide sectors kept still).
 
 ## License
 

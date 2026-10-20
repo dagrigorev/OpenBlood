@@ -611,10 +611,10 @@ pub fn run_tool(args: &[String]) -> bool {
             m.screen = crate::menu::Screen::Options;
             let o = crate::menu::OptionsView {
                 fullscreen: false,
-                resolution: Some((1920, 1080)),
+                resolution: None,
                 upscale: crate::config::Upscale::Sharp,
-                antialias: 1,
-                scale: 0.5,
+                antialias: 0,
+                scale: 1.0,
                 mouse: 0.35,
                 always_run: true,
                 music: true,
