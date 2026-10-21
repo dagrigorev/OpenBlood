@@ -113,7 +113,18 @@ impl Game {
             self.sees[i] = self.can_see_player(i);
         }
         let sees = self.sees[i];
-        if in_range && sees && self.attack_cd[i] <= 0.0 && info.attack != Attack::None {
+        // Melee attackers take turns: while one is mid-swing at the player, the others wait.
+        // Fitted to the E4M9 recordings, where four axe zombies land about one hit every
+        // 0.6-1.0 s, and a lone zombie about as often.
+        let melee = matches!(info.attack, Attack::Melee { .. });
+        let turn_taken = melee
+            && self.world.sprites.iter().enumerate().any(|(j, o)| {
+                j != i
+                    && self.ai.get(j) == Some(&Ai::Attack)
+                    && dude_info(o.lotag).is_some_and(|d| matches!(d.attack, Attack::Melee { .. }))
+                    && (o.x as f64 - px).hypot(o.y as f64 - py) < 1024.0
+            });
+        if in_range && sees && self.attack_cd[i] <= 0.0 && info.attack != Attack::None && !turn_taken {
             self.ai[i] = Ai::Attack;
             self.attack_cd[i] = info.cooldown * (0.8 + 0.4 * (self.rand() % 100) as f64 / 100.0);
             if !self.play_dude_anim(res, i, "A1") {

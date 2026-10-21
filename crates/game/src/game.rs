@@ -996,7 +996,7 @@ impl Game {
         Mover {
             radius: info.radius,
             height: info.height,
-            step: 0x1800 as f64,
+            step: 0x2400 as f64,
         }
     }
 

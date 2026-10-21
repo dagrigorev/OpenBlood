@@ -214,7 +214,8 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
             attack_sound: 1101,
             // Speed, damage and swing rate measured against the original (E4M9 start: hits at
             // 4.2, 5.0, 5.6, 6.7, 7.5 s after the level appears; death 7.5 s on skill 2).
-            cooldown: 2.2,
+            cooldown: 0.9,
+            recoil_chance: 0.05,
             ..d(4352, 60, 1150.0, 64.0, melee(18, 220.0))
         },
         204 => DudeInfo {
