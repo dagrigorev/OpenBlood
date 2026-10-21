@@ -13,8 +13,10 @@
 - Some enemy values are estimates: cultist health and tommy-gun cultist damage (measuring them
   needs aimed shots at moving targets in DOSBox, which keyboard input can't do reliably).
   Difficulty damage scaling is measured for all five skills.
-- Axe-zombie hit spacing at the E4M9 start varies between runs in both games (it depends on how
-  many zombies reach the player); single recordings are not enough to tune it further.
+- E4M9 axe-zombie ambush: approach speed, first hit and death on skill 2 match the original
+  (deterministic DOSBox recordings: hits at 4.2, 5.0, 5.6, 6.7, 7.5 s). Still different: OpenBlood's
+  zombies settle 30-90 degrees beside the player, so holding the tommy gun kills none where the
+  original kills three; on skill 0 the player survives ~3 s longer, on skills 3-4 dies sooner.
 - Saves are tied to the save-format version; saves from older OpenBlood builds cannot be
   loaded after a format change.
 
