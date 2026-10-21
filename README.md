@@ -1,3 +1,5 @@
+<img src="assets/icon-256.png" alt="OpenBlood icon" width="96" align="right">
+
 # OpenBlood
 
 [![CI](https://github.com/dagrigorev/OpenBlood/actions/workflows/ci.yml/badge.svg)](https://github.com/dagrigorev/OpenBlood/actions/workflows/ci.yml)

@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/dagrigorev/OpenBlood/master/assets/icon-256.png" alt="OpenBlood icon" width="96" align="right">
+
 # OpenBlood
 
 OpenBlood is an open-source engine, written from scratch in Rust, that plays **Blood (1997)**
