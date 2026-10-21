@@ -46,8 +46,10 @@ from its code:
 - Walking: top speed ≈ 4600 units/s, acceleration response ≈ 20/s (`player::WALK_SPEED`).
 - Jump: 0.8 s airtime → `GRAVITY = 200000`, `JUMP_VEL = 80000`.
 - Eye height `EYE_STAND = 0x3800`, fitted by correlating renders with captures of the original.
-- Axe zombie: speed, swing rate and damage per difficulty
-  (`damage_player` scales by skill: 0.56, 0.78, 1, 1.25, 1.5).
+- Axe zombie: approach speed ~1700 units/s (`dudes::SPEED_SCALE` 1.5, from frame-by-frame size
+  matching of recordings against renders at known distances), 2.2 s swing cooldown, damage per difficulty
+  (`damage_player` scales by skill: 9/16, 13/16, 1, 19/16, 23/16, measured as 10-11, 14-15,
+  18, 21-22 and 26 per axe hit at the E4M9 start on skills 0-4).
 - Tommy gun: 14.6 rounds/s. Shotgun cultist blast: 7 pellets × 4 damage.
 
 The data-driven tests replay these scenarios; see [Testing](Testing).

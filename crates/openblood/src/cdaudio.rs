@@ -58,7 +58,8 @@ pub fn parse_cue(path: &Path) -> io::Result<(PathBuf, Vec<CueTrack>)> {
     Ok((bin, tracks))
 }
 
-fn write_wav(path: &Path, pcm: &[u8]) -> io::Result<()> {
+/// Writes 16-bit stereo 44.1 kHz PCM bytes as a WAV file.
+pub fn write_wav(path: &Path, pcm: &[u8]) -> io::Result<()> {
     let mut f = io::BufWriter::new(std::fs::File::create(path)?);
     let data_len = pcm.len() as u32;
     f.write_all(b"RIFF")?;
@@ -143,7 +144,9 @@ pub fn stream_wav(path: &Path) -> Option<std::sync::mpsc::Receiver<Vec<i16>>> {
             }
             left -= n as u64;
             let samples: Vec<i16> = bytes[..n]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| i16::from_le_bytes([c[0], c[1]]))
                 .collect();
             if tx.send(samples).is_err() {
@@ -233,7 +236,9 @@ pub fn load_wav(path: &Path) -> Option<Vec<f32>> {
         if id == b"data" {
             let data = &b[p + 8..(p + 8 + len).min(b.len())];
             return Some(
-                data.chunks_exact(2)
+                data.as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
                     .collect(),
             );

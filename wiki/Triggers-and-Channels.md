@@ -14,8 +14,8 @@ Each x-object has:
 | `tx_id` | channel it broadcasts on when it reaches its on or off state |
 | `command` | what it sends on `tx_id` |
 | `state` | current state, off (0) or on (1) |
-| `busy_time` | seconds (tenths) to animate between states, e.g. a door opening |
-| `wait_time` | seconds (tenths) before returning to the rest state |
+| `busy_time` | time (1/20 s units) to animate between states, e.g. a door opening |
+| `wait_time` | time (1/20 s units) before returning to the rest state |
 | trigger flags | push, impact, touch, proximity, sight, enter/exit, pickup ... |
 | `locked`, key | whether it reacts, which key it needs |
 | `data1..data4` | type-specific values |
@@ -37,8 +37,10 @@ sequenceDiagram
 ```
 
 Busy motion is a value from 0 to 65536 advanced each 120 Hz tick and shaped by Blood's
-"wave" curves (`triggers::wave`). Times stored in tenths of a second are converted with
-`tenths_to_ticks`.
+"wave" curves (`triggers::wave`). Busy and wait times are stored in twentieths of a second
+and converted with `time_units_to_ticks` (6 ticks per unit). This was measured in DOSBox at
+the E1M1 start: wait 6 then busy 40 start the coffin floor ~0.3 s after the first input and
+finish ~2 s later, and a wait of 20 plays the player's voice line at ~1 s.
 
 ## Commands (`triggers::cmd`)
 

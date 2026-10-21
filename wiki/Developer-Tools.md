@@ -21,6 +21,8 @@ level name such as `E2M4`. Tools never write into `DATA`.
 | `survey` | `survey DATA` | statistics over all maps |
 | `find-vox` | `find-vox DATA MAP` | sprites drawn as voxels |
 | `vox-test` | `vox-test DATA PIC OUT.png ANG` | voxel next to its flat tile |
+| `midi-info` | `midi-info DATA` | every MIDI song: tracks, FM designation, programs, volume and EMIDI controllers |
+| `midi-render` | `midi-render DATA SONG OUT.wav SECONDS` | the FM rendition of a song as a WAV, with peak/RMS/clipping stats |
 | `smk-frames` | `smk-frames FILE.SMK OUTDIR [STEP]` | every STEP-th cutscene frame as PNG |
 
 ## Rendering

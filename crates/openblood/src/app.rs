@@ -480,7 +480,7 @@ impl App {
         }
         prof.mark("update");
 
-        let events: Vec<GameEvent> = self.game.events.drain(..).collect();
+        let events: Vec<GameEvent> = std::mem::take(&mut self.game.events);
         for e in events {
             match &e {
                 GameEvent::LevelExit { secret } => self.level_exit(*secret),

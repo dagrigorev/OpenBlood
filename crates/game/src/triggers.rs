@@ -188,9 +188,13 @@ pub fn wave(busy: f64, kind: u8) -> f64 {
     }
 }
 
-/// Busy/wait times are stored in tenths of a second; the game clock runs at 120 Hz.
-pub fn tenths_to_ticks(t: u32) -> u64 {
-    (t as u64 * 12).max(1)
+/// Busy/wait times are stored in twentieths of a second; the game clock runs at 120 Hz.
+///
+/// Measured in DOSBox at the E1M1 start: a wait of 6 then a busy time of 40 make the coffin
+/// floor start rising ~0.2-0.3 s after the first input and finish ~2.1 s later, and a wait of
+/// 20 plays the player's voice line at ~1.0 s (tenths would give 0.6, 4.0 and 2.0 s).
+pub fn time_units_to_ticks(t: u32) -> u64 {
+    (t as u64 * 6).max(1)
 }
 
 impl Triggers {
@@ -532,7 +536,7 @@ impl Triggers {
             if let Obj::Sector(s) = o {
                 self.notices.push(Notice::SectorStart(s, target == 1));
             }
-            let ticks = tenths_to_ticks(bt) as f64;
+            let ticks = time_units_to_ticks(bt) as f64;
             self.busy.push(Busy {
                 obj: o,
                 target: busy_target,
@@ -605,7 +609,7 @@ impl Triggers {
         }
         if wait > 0 && st != rest {
             let c = if rest == 1 { cmd::ON } else { cmd::OFF };
-            self.post(o, c, tenths_to_ticks(wait));
+            self.post(o, c, time_units_to_ticks(wait));
         }
     }
 
@@ -888,6 +892,36 @@ impl Triggers {
     }
 }
 
+/// True when two non-adjacent edges of sector `s` cross, using wall positions `pos`.
+fn sector_folds(world: &World, s: usize, pos: &[(i32, i32)]) -> bool {
+    let edges: Vec<((f64, f64), (f64, f64))> = world
+        .sector_walls(s)
+        .map(|w| {
+            let a = pos[w];
+            let b = pos[world.walls[w].point2 as usize];
+            ((a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64))
+        })
+        .collect();
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    for i in 0..edges.len() {
+        for j in i + 1..edges.len() {
+            let (p1, p2) = edges[i];
+            let (q1, q2) = edges[j];
+            if p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2 {
+                continue;
+            }
+            let d1 = cross(q1, q2, p1);
+            let d2 = cross(q1, q2, p2);
+            let d3 = cross(p1, p2, q1);
+            let d4 = cross(p1, p2, q2);
+            if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,20 +971,21 @@ mod tests {
         let mut t = Triggers::new(&w);
         t.init_level(&mut w);
         t.send(&mut w, 100, cmd::TOGGLE);
-        for _ in 0..60 {
+        // busy 10 = half a second (60 ticks)
+        for _ in 0..30 {
             t.update(&mut w);
         }
         assert!(
             w.sectors[0].ceiling.z < -1000 && w.sectors[0].ceiling.z > -8192,
             "half open"
         );
-        for _ in 0..70 {
+        for _ in 0..35 {
             t.update(&mut w);
         }
         assert_eq!(w.sectors[0].ceiling.z, -8192, "fully open");
         assert_eq!(w.xsector(0).unwrap().state, 1);
-        // waits 2 s (240 ticks) then closes over 1 s
-        for _ in 0..400 {
+        // waits 1 s (wait 20, 120 ticks) then closes over half a second
+        for _ in 0..200 {
             t.update(&mut w);
         }
         assert_eq!(w.sectors[0].ceiling.z, 0, "closed again");
@@ -962,7 +997,7 @@ mod tests {
         let mut w = door_world();
         let mut t = Triggers::new(&w);
         t.push_sector(&mut w, 0);
-        for _ in 0..60 {
+        for _ in 0..30 {
             t.update(&mut w);
         }
         let mid = w.sectors[0].ceiling.z;
@@ -1002,34 +1037,4 @@ mod tests {
             assert!((wave(1.0, k) - 1.0).abs() < 1e-9);
         }
     }
-}
-
-/// True when two non-adjacent edges of sector `s` cross, using wall positions `pos`.
-fn sector_folds(world: &World, s: usize, pos: &[(i32, i32)]) -> bool {
-    let edges: Vec<((f64, f64), (f64, f64))> = world
-        .sector_walls(s)
-        .map(|w| {
-            let a = pos[w];
-            let b = pos[world.walls[w].point2 as usize];
-            ((a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64))
-        })
-        .collect();
-    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
-    for i in 0..edges.len() {
-        for j in i + 1..edges.len() {
-            let (p1, p2) = edges[i];
-            let (q1, q2) = edges[j];
-            if p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2 {
-                continue;
-            }
-            let d1 = cross(q1, q2, p1);
-            let d2 = cross(q1, q2, p2);
-            let d3 = cross(p1, p2, q1);
-            let d4 = cross(p1, p2, q2);
-            if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
-                return true;
-            }
-        }
-    }
-    false
 }

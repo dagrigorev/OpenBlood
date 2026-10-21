@@ -231,6 +231,7 @@ impl Menu {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
         frame: &mut [u32],

@@ -9,10 +9,16 @@ Get the latest build from the [Releases](Releases) page:
 | Platform | File |
 | --- | --- |
 | Windows 10/11, 64-bit | `openblood-<version>-windows-x64.zip` |
+| Windows 11 on ARM | `openblood-<version>-windows-arm64.zip` |
+| macOS 11+, Apple silicon or Intel | `openblood-<version>-macos-universal.tar.gz` |
 | Linux, 64-bit (X11 or Wayland, ALSA/PulseAudio/PipeWire) | `openblood-<version>-linux-x64.tar.gz` |
 
 Unpack it into a folder of its own, for example `C:\Games\OpenBlood`. Each release also lists
 `SHA256SUMS.txt` to verify the download.
+
+**macOS:** the binary is not signed or notarized. After unpacking, allow it once with
+`xattr -d com.apple.quarantine openblood` (or right-click, Open), then start it from Terminal
+with `./openblood`.
 
 ## 2. Install and patch Blood
 
@@ -39,7 +45,9 @@ directory and in a `blood` subfolder next to the executable.
 ## 4. Optional: music and cutscenes
 
 Blood's music is CD audio, and the cutscenes are Smacker videos on the disc. OpenBlood reads
-both straight from an image of **your** disc (CUE/BIN):
+both straight from an image of **your** disc (CUE/BIN). Without ripped tracks, each level plays
+its MIDI song from `SOUNDS.RFF` through OpenBlood's FM synthesizer, like the original with an
+AdLib or Sound Blaster card.
 
 ```
 openblood extract-cd BLOODCD1.cue music
@@ -74,7 +82,7 @@ All options are described in [Configuration](Configuration); the keys are in
 | Symptom | Fix |
 | --- | --- |
 | "OpenBlood needs the files from your original Blood installation" | `BLOOD.RFF` was not found. Copy the data files (step 3) or set `data_dir`. |
-| No music | Rip the CD tracks (step 4) and check `music = 1` in `openblood.ini`. |
+| No music | Check `music = 1` in `openblood.ini` and the music volume. Ripped CD tracks (step 4) replace the FM/MIDI music. |
 | Low frame rate at 4K | Lower **Anti-aliasing** or **Render Scale** in Options, or cap FPS. |
 | Saved games from an older build will not load | Save-format changes are not backwards compatible; start the level again. |
 | Linux: no sound | Install the ALSA runtime (`libasound2`) or the PipeWire/PulseAudio ALSA plugin. |

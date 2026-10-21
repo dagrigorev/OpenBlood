@@ -606,7 +606,7 @@ fn cast_column(
             let w2 = &walls[w1.point2 as usize];
             if let Some((t, s)) = ray_segment(cam.x, cam.y, dx, dy, w1.x as f64, w1.y as f64, w2.x as f64, w2.y as f64)
             {
-                if t > t_enter + 1e-7 && best.map_or(true, |b| t < b.0) {
+                if t > t_enter + 1e-7 && best.is_none_or(|b| t < b.0) {
                     best = Some((t, s, wi));
                 }
             }
@@ -861,7 +861,7 @@ fn draw_plane(
             let k = (y as f64 + 0.5 - view.horizon) / view.fly * 16.0;
             let den = k - b;
             let t = if den.abs() > 1e-12 { (a - cam.z) / den } else { -1.0 };
-            if !(t > 0.0) {
+            if t.is_nan() || t <= 0.0 {
                 pix[y] = 0;
                 depth[y] = f32::INFINITY;
                 continue;
@@ -944,7 +944,7 @@ fn draw_plane(
             continue;
         }
         let mut t = if flat { height * view.row_inv_k[y] } else { height / den };
-        if !(t > 0.0) {
+        if t.is_nan() || t <= 0.0 {
             t = 1e9;
         }
         let px = cam.x + dx * t - ox;
@@ -1050,8 +1050,11 @@ struct ColSeg {
     floor: PlaneEq,
     /// Wall hit at `t1` (index, position along it) and, for a portal, the next sector's
     /// ceiling/floor heights at the hit point.
-    wall: Option<(usize, f64, Option<(f64, f64)>)>,
+    wall: Option<WallHit>,
 }
+
+/// (wall index, position along the wall, next sector's (ceiling, floor) z for a portal).
+type WallHit = (usize, f64, Option<(f64, f64)>);
 
 /// Sectors crossed by a column's ray `(ox, oy) + t (dx, dy)`, found lazily: only as far
 /// along as some pixel of the column actually reaches.
@@ -1237,6 +1240,7 @@ fn trace_column(
     (0, f64::INFINITY)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn trace_pixel(
     scene: &Scene,
     mut s: i32,
@@ -1803,6 +1807,7 @@ fn project_sprite(idx: usize, s: &SpriteDraw, scene: &Scene, cam: &Camera, view:
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_sprite_column(
     x: usize,
     sp: &SprProj,

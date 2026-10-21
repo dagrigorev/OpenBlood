@@ -35,8 +35,8 @@ the game.
   keys, secrets, teleporters. See [Triggers and Channels](Triggers-and-Channels).
 - Weapons with alternate fire, inventory, power-ups and enemy AI tuned against recordings of
   the original running in DOSBox.
-- Deterministic save games, CD music ripped from your disc image, intro and episode
-  cutscenes.
+- Deterministic save games, CD music ripped from your disc image (or the original MIDI score
+  through a built-in FM synthesizer), intro and episode cutscenes.
 
 ## Documentation map
 

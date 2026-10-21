@@ -25,7 +25,7 @@ likely.
 3. Run locally:
    ```
    cargo fmt --all
-   cargo clippy --workspace --all-targets
+   cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    OPENBLOOD_DATA=/path/to/blood cargo test --workspace --release
    ```

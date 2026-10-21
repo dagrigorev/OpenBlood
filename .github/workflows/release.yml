@@ -81,9 +81,17 @@ jobs:
           - name: windows-x64
             os: windows-latest
             bin: openblood.exe
+          - name: windows-arm64
+            os: windows-11-arm
+            bin: openblood.exe
           - name: linux-x64
             os: ubuntu-latest
             bin: openblood
+          # One universal binary for Apple silicon and Intel Macs, tested on arm64.
+          - name: macos-universal
+            os: macos-latest
+            bin: openblood
+            mac_targets: aarch64-apple-darwin x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
 
@@ -92,6 +100,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.mac_targets && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -101,7 +111,20 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build
-        run: cargo build --release --locked
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.mac_targets }}" ]; then
+            outs=()
+            for t in ${{ matrix.mac_targets }}; do
+              cargo build --release --locked --target "$t"
+              outs+=("target/$t/release/${{ matrix.bin }}")
+            done
+            mkdir -p target/release
+            lipo -create -output "target/release/${{ matrix.bin }}" "${outs[@]}"
+            lipo -info "target/release/${{ matrix.bin }}"
+          else
+            cargo build --release --locked
+          fi
 
       - name: Package
         shell: bash
@@ -113,6 +136,7 @@ jobs:
           cp "target/release/${{ matrix.bin }}" README.md LICENSE-MIT "dist/${name}/"
           # Release builds keep debug info (profile.release debug = 1). Windows puts it in a
           # separate .pdb that is not packaged; on Linux it is inside the binary, so strip it.
+          # macOS leaves it in the object files, so the binary is already small.
           if [ "${RUNNER_OS}" = "Linux" ]; then
             strip "dist/${name}/${{ matrix.bin }}"
           fi

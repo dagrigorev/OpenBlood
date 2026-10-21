@@ -411,7 +411,7 @@ impl Game {
 
     /// Moves the player along with sliding / rotating sectors they stand in.
     fn carry_player(&mut self) {
-        let carries: Vec<_> = self.triggers.carries.drain(..).collect();
+        let carries: Vec<_> = std::mem::take(&mut self.triggers.carries);
         for c in carries {
             if self.player.sector as usize == c.sector && self.player.on_ground {
                 let (x, y) = c.apply(self.player.x, self.player.y);
@@ -542,7 +542,7 @@ impl Game {
     }
 
     fn handle_notices(&mut self) {
-        let notices: Vec<Notice> = self.triggers.notices.drain(..).collect();
+        let notices: Vec<Notice> = std::mem::take(&mut self.triggers.notices);
         for n in notices {
             match n {
                 Notice::LevelExit { secret } => self.events.push(GameEvent::LevelExit { secret }),
@@ -758,10 +758,8 @@ impl Game {
                 };
                 let wall_usable = self.world.xwall(wi).is_some();
                 let sector_usable = ns >= 0 && self.world.xsector(ns as usize).is_some_and(|x| x.push || x.wallpush);
-                if wall_usable || sector_usable {
-                    if !self.check_key(wkey.max(skey)) {
-                        return;
-                    }
+                if (wall_usable || sector_usable) && !self.check_key(wkey.max(skey)) {
+                    return;
                 }
                 done = self.triggers.push_wall(&mut self.world, wi);
             }
@@ -1024,10 +1022,10 @@ impl Game {
                             self.damage_sprite(res, i, damage, false);
                         }
                         TraceTarget::Sprite(PLAYER_ID) => self.damage_player(damage, Some(i)),
-                        TraceTarget::Wall(_) | TraceTarget::Floor(_) | TraceTarget::Ceiling(_) => {
-                            if self.rand() % 3 == 0 {
-                                self.spawn_fx(44, h.x, h.y, h.z, h.sector);
-                            }
+                        TraceTarget::Wall(_) | TraceTarget::Floor(_) | TraceTarget::Ceiling(_)
+                            if self.rand().is_multiple_of(3) =>
+                        {
+                            self.spawn_fx(44, h.x, h.y, h.z, h.sector);
                         }
                         _ => {}
                     }
@@ -1103,8 +1101,9 @@ impl Game {
         if self.player.dead || amount <= 0 || self.powerups.invulnerable > 0.0 {
             return;
         }
-        // Difficulty scales damage taken (measured in DOSBox: 18 on skill 2, ~10 on skill 0).
-        const SKILL_SCALE: [f64; 5] = [0.56, 0.78, 1.0, 1.25, 1.5];
+        // Difficulty scales damage taken. Measured in DOSBox (E4M9 axe-zombie hits, 18 on
+        // skill 2): 10-11, 14-15, 18, 21-22 and 26 per hit, i.e. 9/16, 13/16, 1, 19/16, 23/16.
+        const SKILL_SCALE: [f64; 5] = [0.5625, 0.8125, 1.0, 1.1875, 1.4375];
         let mut dmg = ((amount as f64 * SKILL_SCALE[self.skill.clamp(0, 4) as usize]).round() as i32).max(1);
         for a in self.player.armor.iter_mut() {
             if *a > 0 && dmg > 0 {
@@ -1122,7 +1121,7 @@ impl Game {
             let v = (self.rand() % 3) as i32;
             self.sound(716 + v, None);
             self.push_message("You are dead. Press Use to restart.".into());
-        } else if self.rand() % 2 == 0 {
+        } else if self.rand().is_multiple_of(2) {
             let v = (self.rand() % 6) as i32;
             self.sound(710 + v, None);
         }
@@ -1283,6 +1282,7 @@ impl Game {
         Some(i)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn explode(&mut self, res: &Resources, x: f64, y: f64, z: f64, sect: i32, radius: f64, damage: i32, fire: bool) {
         if let Some(i) = self.spawn_fx(if fire { 5 } else { 3 }, x, y, z, sect) {
             self.world.sprites[i].xrepeat = 64;

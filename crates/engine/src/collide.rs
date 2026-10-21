@@ -199,8 +199,8 @@ pub fn find_sector_near(sectors: &[Sector], walls: &[Wall], x: f64, y: f64, hint
                 return s as i32;
             }
             let sec = &sectors[s];
-            for wi in sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize {
-                let ns = walls[wi].nextsector;
+            for wall in &walls[sec.wallptr as usize..(sec.wallptr + sec.wallnum) as usize] {
+                let ns = wall.nextsector;
                 if ns >= 0 && !list.contains(&(ns as usize)) {
                     list.push(ns as usize);
                 }
@@ -218,6 +218,7 @@ pub fn find_sector_near(sectors: &[Sector], walls: &[Wall], x: f64, y: f64, hint
 
 /// Highest floor and lowest ceiling under a cylinder of `radius` at (x, y).
 /// Returns `(ceil_z, ceil_sector, floor_z, floor_sector)`.
+#[allow(clippy::too_many_arguments)]
 pub fn get_z_range(
     sectors: &[Sector],
     walls: &[Wall],

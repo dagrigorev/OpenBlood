@@ -55,8 +55,10 @@ pub struct DudeInfo {
     pub recoil_chance: f64,
 }
 
-/// Dude speeds below are relative values scaled to match the measured player speed.
-const SPEED_SCALE: f64 = 3.0;
+/// Dude speeds below are relative values. The scale makes the E4M9 axe zombies close in at
+/// the ~1700 units/s measured in DOSBox recordings (frame-by-frame size matching against
+/// renders at known distances).
+const SPEED_SCALE: f64 = 1.5;
 
 const fn d(seq_base: u32, health: i32, speed: f64, radius: f64, attack: Attack) -> DudeInfo {
     DudeInfo {
@@ -210,8 +212,9 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
             pain_sound: 1106,
             die_sound: 1107,
             attack_sound: 1101,
-            // Speed, damage and swing rate measured against the original (E4M9 start).
-            cooldown: 1.8,
+            // Speed, damage and swing rate measured against the original (E4M9 start: hits at
+            // 4.2, 5.0, 5.6, 6.7, 7.5 s after the level appears; death 7.5 s on skill 2).
+            cooldown: 2.2,
             ..d(4352, 60, 1150.0, 64.0, melee(18, 220.0))
         },
         204 => DudeInfo {

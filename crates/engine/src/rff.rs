@@ -98,7 +98,7 @@ impl Rff {
         let mut entries = Vec::with_capacity(count);
         let mut by_name = HashMap::new();
         let mut by_id = HashMap::new();
-        for (i, e) in dict.chunks_exact(ENTRY_SIZE).enumerate() {
+        for (i, e) in dict.as_chunks::<ENTRY_SIZE>().0.iter().enumerate() {
             let rd = |o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
             let entry = RffEntry {
                 offset: rd(16),

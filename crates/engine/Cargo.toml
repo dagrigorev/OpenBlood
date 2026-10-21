@@ -3,6 +3,7 @@ name = "ob-engine"
 description = "Clean-room Build-engine compatible data readers and renderer for OpenBlood"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

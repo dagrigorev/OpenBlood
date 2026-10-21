@@ -49,6 +49,7 @@ The data never enters the repository.
 | `idle_dudes_wander_near_home` | idle enemies move but stay near their post |
 | `camera_moves_smoothly_between_ticks` | interpolation has no jumps |
 | `all_cutscenes_decode` | every SMK in `movie/` decodes |
+| `original_songs_render` (openblood) | every MIDI song parses and renders audibly without clipping |
 
 ## Visual checks
 
@@ -58,6 +59,6 @@ original is compared against DOSBox captures; see [Developer Tools](Developer-To
 
 ## In CI
 
-GitHub Actions runs the unit tests on Windows and Linux for every pull request and before
-every release. The data-driven tests cannot run there (no game data), so run them locally
+GitHub Actions runs the unit tests on Windows (x64 and ARM64), Linux and macOS for every pull
+request and before every release. The data-driven tests cannot run there (no game data), so run them locally
 before sending changes that touch game behaviour. See [CI and Releases](CI-and-Releases).

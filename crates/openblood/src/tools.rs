@@ -596,11 +596,8 @@ pub fn run_tool(args: &[String]) -> bool {
                     img[y as usize * n + x as usize] = c;
                 }
             };
-            let line = |img: &mut Vec<u32>,
-                        put: &mut dyn FnMut(&mut Vec<u32>, f64, f64, u32),
-                        a: (f64, f64),
-                        b: (f64, f64),
-                        c: u32| {
+            type Plot<'a> = dyn FnMut(&mut Vec<u32>, f64, f64, u32) + 'a;
+            let line = |img: &mut Vec<u32>, put: &mut Plot<'_>, a: (f64, f64), b: (f64, f64), c: u32| {
                 let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).max(1);
                 for k in 0..=steps {
                     let t = k as f64 / steps as f64;
@@ -800,6 +797,77 @@ pub fn run_tool(args: &[String]) -> bool {
                 );
             }
         }
+        Some("midi-info") => {
+            // openblood midi-info DATA : every MIDI song in SOUNDS.RFF with its tracks, EMIDI
+            // designation for FM, programs, volume/expression and EMIDI controllers used.
+            let res = Resources::load(&args[2]).expect("load");
+            let rff = res.sounds.as_ref().expect("SOUNDS.RFF");
+            for e in rff.entries.iter().filter(|e| e.ext == "MID") {
+                let song = match crate::midi::Song::parse(&rff.read(e).unwrap()) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        println!("{}: {err}", e.file_name());
+                        continue;
+                    }
+                };
+                println!(
+                    "{}: division {}, {} tracks",
+                    e.file_name(),
+                    song.division,
+                    song.tracks.len()
+                );
+                for (i, t) in song.tracks.iter().enumerate() {
+                    let mut ccs = std::collections::BTreeMap::<u8, Vec<u8>>::new();
+                    let (mut notes, mut progs, mut chans) = (0, std::collections::BTreeSet::new(), 0u16);
+                    for &(_, m) in &t.events {
+                        match m {
+                            crate::midi::Msg::NoteOn { ch, .. } => {
+                                notes += 1;
+                                chans |= 1 << ch;
+                            }
+                            crate::midi::Msg::Program { ch, prog } => {
+                                progs.insert((ch, prog));
+                            }
+                            crate::midi::Msg::Control { cc, val, .. } if cc >= 100 || cc == 7 || cc == 11 => {
+                                let v = ccs.entry(cc).or_default();
+                                if !v.contains(&val) {
+                                    v.push(val);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    println!(
+                        "  track {i:2}: fm={} end={} notes={notes} channels={chans:#06x} programs={progs:?} controllers={ccs:?}",
+                        crate::midi::track_plays_on_fm(t) as u8,
+                        t.end
+                    );
+                }
+            }
+        }
+        Some("midi-render") => {
+            // openblood midi-render DATA SONG OUT.wav SECONDS : the FM rendition of SONG.MID.
+            let res = Resources::load(&args[2]).expect("load");
+            let rff = res.sounds.as_ref().expect("SOUNDS.RFF");
+            let bank = crate::midi::parse_bank(&rff.read_name("GMTIMBRE.TMB").expect("GMTIMBRE.TMB")).expect("bank");
+            let mid = rff
+                .read_name(&format!("{}.MID", args[3].to_ascii_uppercase()))
+                .expect("song");
+            let song = crate::midi::Song::parse(&mid).expect("parse");
+            let secs: f64 = args[5].parse().unwrap();
+            let mut pcm = vec![0i16; (secs * 44100.0) as usize * 2];
+            let t0 = std::time::Instant::now();
+            crate::midi::Player::new(song, bank, 44100.0).render(&mut pcm);
+            let peak = pcm.iter().map(|&s| (s as i32).abs()).max().unwrap_or(0);
+            let rms = (pcm.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / pcm.len().max(1) as f64).sqrt();
+            let clipped = pcm.iter().filter(|&&s| s == i16::MAX || s == -i16::MAX).count();
+            eprintln!(
+                "rendered {secs} s in {:?}: peak {peak}, rms {rms:.0}, clipped samples {clipped}",
+                t0.elapsed()
+            );
+            let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+            crate::cdaudio::write_wav(std::path::Path::new(&args[4]), &bytes).expect("write");
+        }
         Some("extract-movies") => {
             // openblood extract-movies DISC.cue OUTDIR : copies the disc's MOVIE folder.
             match crate::cdaudio::extract_dir(std::path::Path::new(&args[2]), "MOVIE", std::path::Path::new(&args[3])) {
@@ -819,7 +887,7 @@ pub fn run_tool(args: &[String]) -> bool {
             let t0 = std::time::Instant::now();
             while v.next_frame().expect("decode") {
                 let n = v.position() - 1;
-                if n % step == 0 {
+                if n.is_multiple_of(step) {
                     let out = std::path::Path::new(&args[3]).join(format!("f{n:04}.png"));
                     save_png(out.to_str().unwrap(), v.width, v.height, &v.pixels());
                 }
