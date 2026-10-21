@@ -224,7 +224,51 @@ impl Game {
                 }
             }
         }
+        g.fix_sprite_sectors();
         Ok(g)
+    }
+
+    /// Some maps store pickups, dudes and blocking sprites with the sector number of a
+    /// neighbour, or (in stacked rooms) of a sector at another height. Such a sprite would
+    /// collide, light and draw with the wrong floor, or never be drawn. Reassign it to the
+    /// sector that contains its position and height (or at least its position).
+    fn fix_sprite_sectors(&mut self) {
+        const SLACK: f64 = 256.0;
+        let w = &self.world;
+        let mut moves = Vec::new();
+        for (i, s) in w.sprites.iter().enumerate() {
+            if s.statnum == stat::FREE || s.sectnum < 0 || s.cstat & 48 != 0 {
+                continue;
+            }
+            if !(pickup_of(s.lotag).is_some() || is_dude(s.lotag) || s.cstat & SPR_BLOCK != 0) {
+                continue;
+            }
+            let (x, y, z) = (s.x as f64, s.y as f64, s.z as f64);
+            let fits = |sec: usize| {
+                let (c, f) = w.zs_at(sec, x, y);
+                z >= c - SLACK && z <= f + SLACK
+            };
+            let cur = s.sectnum as usize;
+            if ob_engine::geom::inside_sector(&w.sectors, &w.walls, cur, x, y) && fits(cur) {
+                continue;
+            }
+            let containing: Vec<usize> = (0..w.sectors.len())
+                .filter(|&k| ob_engine::geom::inside_sector(&w.sectors, &w.walls, k, x, y))
+                .collect();
+            let best = containing.iter().copied().find(|&k| fits(k)).or_else(|| {
+                if ob_engine::geom::inside_sector(&w.sectors, &w.walls, cur, x, y) {
+                    None
+                } else {
+                    containing.first().copied()
+                }
+            });
+            if let Some(k) = best.filter(|&k| k != cur) {
+                moves.push((i, k));
+            }
+        }
+        for (i, k) in moves {
+            self.world.sprites[i].sectnum = k as i16;
+        }
     }
 
     fn rand(&mut self) -> u32 {
@@ -267,7 +311,7 @@ impl Game {
             self.tick(res, &inp, step);
         }
         self.damage_flash = (self.damage_flash - dt * 2.0).max(0.0);
-        self.pickup_flash = (self.pickup_flash - dt * 3.0).max(0.0);
+        self.pickup_flash = (self.pickup_flash - dt * 6.0).max(0.0);
     }
 
     fn snapshot(&mut self) {
@@ -1999,7 +2043,17 @@ impl Game {
                 z,
                 picnum: pic,
                 cstat,
-                shade: s.shade as i32,
+                // Sprites take on their sector's (current, light-effected) shade, as in the
+                // original: a zombie in a dark corridor is as dark as the corridor (E2M4), a
+                // tree under the open sky is lit like the sky (E4M9).
+                shade: s.shade as i32
+                    + self.world.sectors.get(s.sectnum.max(0) as usize).map_or(0, |sec| {
+                        if sec.ceiling.stat & ob_engine::render::PLANE_PARALLAX != 0 {
+                            sec.ceiling.shade as i32
+                        } else {
+                            sec.floor.shade as i32
+                        }
+                    }),
                 pal: s.pal,
                 xrepeat: s.xrepeat,
                 yrepeat: s.yrepeat,
