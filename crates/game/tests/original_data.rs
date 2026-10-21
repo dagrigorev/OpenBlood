@@ -479,13 +479,9 @@ fn tommy_gun_fire_rate_matches_original() {
 
 /// Reference: DOSBox recording (2026-10-21) of the E4M9 start on skill 2, tommy gun trigger
 /// held from 2.8 s after the level appears: zombies go down at ~5.4, ~7.3 and ~8.5 s and the
-/// player dies at ~8.9 s.
-///
-/// Known gap: OpenBlood's zombies round the planter and settle 30-90 degrees beside the
-/// player, out of the line of fire, so it kills none before dying at ~7.7 s. Ignored until
-/// the approach or auto-aim is reworked; run with `--ignored` to see the current numbers.
+/// player dies at ~8.9 s. The planter in front of the player (an exploding object) must
+/// survive the bullets, and axe zombies take half damage from them.
 #[test]
-#[ignore = "known gap: zombies settle beside the player, see doc comment"]
 fn tommy_gun_ambush_matches_original() {
     let Some(r) = res() else { return };
     let mut g = Game::load_level_skill(&r, "E4M9", 2).unwrap();

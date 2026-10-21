@@ -53,6 +53,8 @@ pub struct DudeInfo {
     pub attack_sound: i32,
     /// Chance (0..1) that a hit interrupts the dude.
     pub recoil_chance: f64,
+    /// Multiplier for tommy-gun bullet damage taken.
+    pub bullet_scale: f64,
 }
 
 /// Dude speeds below are relative values. The scale makes the E4M9 axe zombies close in at
@@ -75,6 +77,7 @@ const fn d(seq_base: u32, health: i32, speed: f64, radius: f64, attack: Attack) 
         die_sound: 0,
         attack_sound: 0,
         recoil_chance: 0.5,
+        bullet_scale: 1.0,
     }
 }
 
@@ -216,6 +219,8 @@ pub fn dude_info(t: i16) -> Option<DudeInfo> {
             // 4.2, 5.0, 5.6, 6.7, 7.5 s after the level appears; death 7.5 s on skill 2).
             cooldown: 0.9,
             recoil_chance: 0.05,
+            // Tommy-gun fire on skill 2 (E4M9 start): kills at 5.4, 7.3, 8.5 s, death 8.9 s.
+            bullet_scale: 0.5,
             ..d(4352, 60, 1150.0, 64.0, melee(18, 220.0))
         },
         204 => DudeInfo {

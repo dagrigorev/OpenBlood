@@ -37,6 +37,7 @@ const PICKUP_REACH: f64 = 768.0;
 /// Thing types with special handling.
 const TNT_BARREL: i16 = 400;
 const WALL_CRACK: i16 = 408;
+const OBJECT_EXPLODE: i16 = 417;
 const EXPLODER: i16 = 459;
 
 /// Events surfaced to the front end (sounds, messages, level changes).
@@ -1216,8 +1217,9 @@ impl Game {
             return;
         }
         // Things with health (barrels, glass, ...): destroy and fire their trigger. Wall cracks
-        // only give way to explosions (barrels, dynamite).
-        let breakable = if t == WALL_CRACK {
+        // and exploding scenery (type 417, e.g. the E4M9 tree, which survives ~90 tommy-gun
+        // rounds in a recording of the original) only give way to explosions.
+        let breakable = if t == WALL_CRACK || t == OBJECT_EXPLODE {
             explosive
         } else {
             self.world.sprites[i].cstat & 256 != 0 || self.world.rt[i].health > 0
@@ -1757,8 +1759,15 @@ impl Game {
                         TraceTarget::Nothing => {}
                     }
                 }
+                let bullets = self.arsenal.def().ammo == crate::weapons::ammo::BULLETS;
                 for (j, amount) in hits {
-                    self.damage_sprite(res, j, amount, false);
+                    // Tommy-gun rounds (not shotgun shells) are scaled by the dude's bullet resistance.
+                    let scale = if bullets {
+                        dude_info(self.world.sprites[j].lotag).map_or(1.0, |d| d.bullet_scale)
+                    } else {
+                        1.0
+                    };
+                    self.damage_sprite(res, j, ((amount as f64 * scale).round() as i32).max(1), false);
                 }
                 self.alert_nearby(res, 10000.0); // gunshots carry far
             }
