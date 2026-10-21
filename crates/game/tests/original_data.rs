@@ -133,7 +133,14 @@ fn pushable_objects_react() {
                 })
                 .map(|i| ('p', i)),
         );
+        let gone = |g: &Game, kind: char, i: usize| {
+            kind == 'p' && (g.world.sprites[i].statnum == ob_game::world::stat::FREE || g.world.xsprite(i).is_none())
+        };
         for (kind, i) in cands {
+            // Earlier pushes may have blown this object up (barrels, exploders).
+            if gone(&g, kind, i) {
+                continue;
+            }
             // An earlier push may have locked this object through its channel.
             let locked_now = match kind {
                 'w' => g.world.xwall(i).is_some_and(|x| x.locked),
@@ -152,6 +159,9 @@ fn pushable_objects_react() {
             };
             for _ in 0..30 {
                 g.update(&r, &idle, 1.0 / 120.0);
+            }
+            if gone(&g, kind, i) {
+                continue; // destroyed by its own push: it reacted
             }
             if !pushed || reaction_print(&g, kind, i) == before {
                 dead.push(format!("{name} {kind}{i}"));
