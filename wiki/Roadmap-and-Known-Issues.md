@@ -7,9 +7,10 @@
 
 ## Known differences from the original
 
-- **E1M1 starting coffin:** the view above the coffin walls still differs (a room-over-room
-  view). Eye height and vertical proportions elsewhere were fitted to screenshots of the
-  original and match closely.
+- **E1M1 starting coffin:** shape, eye height and the floor's rise match DOSBox recordings
+  (earlier "taller view" reports came from screenshots taken after the rise had begun: a click
+  or fire key starts the level). Still different: the crypt seen through the open top is
+  brighter than in the original, and its carved panels look gold instead of reddish.
 - Some enemy values are estimates: cultist health and tommy-gun cultist damage (measuring them
   needs aimed shots at moving targets in DOSBox, which keyboard input can't do reliably).
   Difficulty damage scaling is measured for all five skills.

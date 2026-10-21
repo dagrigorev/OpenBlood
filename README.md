@@ -93,9 +93,10 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 Not yet: multiplayer, the full set of enemy behaviours, health/damage
 measurements for most enemies.
 
-Known differences: the E1M1 starting coffin still looks different above the coffin walls
-(a room-over-room view); eye height and vertical proportions elsewhere were fitted to
-screenshots of the original and now match closely.
+Known differences: in the E1M1 coffin the crypt seen through the open top is brighter than in
+the original and its carved panels look gold instead of reddish; the coffin's shape, eye height
+and rise (now 2 s, matching recordings) match. Eye height and vertical proportions were fitted
+to screenshots of the original and match closely.
 
 ## Setup
 

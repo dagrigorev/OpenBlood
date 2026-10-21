@@ -376,7 +376,8 @@ fn tommy_gun_ambush_matches_original() {
 }
 
 /// Reference: E1M1 starts inside a coffin (sector 30). The first input fires level start,
-/// the coffin floor rises (busy time 4 s) and the player jumps out over the rim into the crypt.
+/// the coffin floor rises (busy time 40 = 2 s, as recorded in DOSBox) and the player jumps
+/// out over the rim into the crypt.
 #[test]
 fn e1m1_player_can_climb_out_of_coffin() {
     let Some(r) = res() else { return };
