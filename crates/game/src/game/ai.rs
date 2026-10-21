@@ -154,52 +154,58 @@ impl Game {
 
     /// Moves a dude `dist` units toward `ang`, sliding around obstacles and refusing to
     /// step off high ledges. Returns true if it moved.
+    ///
+    /// Moves that keep (almost) full speed win over grinding along an obstacle: the first
+    /// pass accepts only those, trying straight ahead, then wider detours in a fixed order;
+    /// the second pass falls back to any move that gets somewhere. That way a dude rounds an
+    /// obstacle briskly, like the E4M9 axe zombies around the central planter in the original.
     fn dude_walk(&mut self, i: usize, info: &DudeInfo, ang: f64, dist: f64) -> bool {
         let m = Self::dude_mover(info);
-        for k in [0.0, 0.7, -0.7, 1.4, -1.4] {
-            let a = ang + k;
-            let s = &self.world.sprites[i];
-            let (x, y, z) = (s.x as f64, s.y as f64, s.z as f64);
-            let (nx, ny, ns, _) = collide::clip_move(
-                &self.world.sectors,
-                &self.world.walls,
-                &[],
-                x,
-                y,
-                z,
-                s.sectnum as i32,
-                a.cos() * dist,
-                a.sin() * dist,
-                &m,
-            );
-            if ns < 0 {
-                continue;
-            }
-            let moved = (nx - x).hypot(ny - y);
-            if moved < dist * 0.3 {
-                continue;
-            }
-            if !info.flying {
-                let (_, f) = self.world.zs_at(ns as usize, nx, ny);
-                if f - z > 0x3000 as f64 {
-                    continue; // don't walk off cliffs
+        for min_part in [0.9, 0.3] {
+            for k in [0.0, 0.7, -0.7, 1.4, -1.4] {
+                let a = ang + k;
+                let s = &self.world.sprites[i];
+                let (x, y, z) = (s.x as f64, s.y as f64, s.z as f64);
+                let (nx, ny, ns, _) = collide::clip_move(
+                    &self.world.sectors,
+                    &self.world.walls,
+                    &[],
+                    x,
+                    y,
+                    z,
+                    s.sectnum as i32,
+                    a.cos() * dist,
+                    a.sin() * dist,
+                    &m,
+                );
+                if ns < 0 {
+                    continue;
                 }
+                let moved = (nx - x).hypot(ny - y);
+                if moved < dist * min_part {
+                    continue;
+                }
+                if !info.flying {
+                    let (_, f) = self.world.zs_at(ns as usize, nx, ny);
+                    if f - z > 0x3000 as f64 {
+                        continue; // don't walk off cliffs
+                    }
+                }
+                if self.crowded(i, info, x, y, nx, ny) {
+                    continue;
+                }
+                let s = &mut self.world.sprites[i];
+                s.x = nx.round() as i32;
+                s.y = ny.round() as i32;
+                s.sectnum = ns as i16;
+                if k != 0.0 {
+                    s.ang = ((a.to_degrees() / 360.0 * 2048.0).rem_euclid(2048.0)) as i16;
+                }
+                return true;
             }
-            if self.crowded(i, info, x, y, nx, ny) {
-                continue;
-            }
-            let s = &mut self.world.sprites[i];
-            s.x = nx.round() as i32;
-            s.y = ny.round() as i32;
-            s.sectnum = ns as i16;
-            if k != 0.0 {
-                s.ang = ((a.to_degrees() / 360.0 * 2048.0).rem_euclid(2048.0)) as i16;
-            }
-            return true;
         }
         false
     }
-
     /// True when moving dude `i` from (x, y) to (nx, ny) pushes it further into another
     /// live dude or the player (dudes don't walk through each other).
     fn crowded(&self, i: usize, info: &DudeInfo, x: f64, y: f64, nx: f64, ny: f64) -> bool {
