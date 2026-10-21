@@ -93,10 +93,10 @@ Without the original files it does nothing. Blood is © 1997 Monolith Production
 Not yet: multiplayer, the full set of enemy behaviours, health/damage
 measurements for most enemies.
 
-Known differences: in the E1M1 coffin the crypt seen through the open top is brighter than in
-the original and its carved panels look gold instead of reddish; the coffin's shape, eye height
-and rise (now 2 s, matching recordings) match. Eye height and vertical proportions were fitted
-to screenshots of the original and match closely.
+Known differences: see the wiki's
+[Roadmap and Known Issues](https://github.com/dagrigorev/OpenBlood/wiki/Roadmap-and-Known-Issues).
+Distance shading, sector visibility, sprite lighting and voxel sizes were fitted to DOSBox
+captures of nine map starts; eye height and vertical proportions match closely.
 
 ## Setup
 

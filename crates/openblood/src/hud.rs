@@ -215,7 +215,8 @@ pub fn draw(
         }
     }
     tint(frame, (255.0, 0.0, 0.0), game.damage_flash * 0.6);
-    tint(frame, (255.0, 230.0, 120.0), game.pickup_flash * 0.25);
+    // A brief, light flash: the original shows no visible tint ~0.2 s after a pickup.
+    tint(frame, (255.0, 230.0, 120.0), game.pickup_flash * 0.12);
     // Crosshair.
     let (cx, cy) = (w as i32 / 2, h as i32 / 2 - (10 * h as i32 / 200));
     for d in -2 * s..=2 * s {
@@ -605,8 +606,12 @@ pub fn status_bar(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: 
         let rx = 320.0 - right.width as f64;
         let ry = 200.0 - right.height as f64;
         vtile(frame, w, h, res, luts, PANEL_RIGHT, rx, ry, Anchor::Right, 1.0, 0, 0);
-        // Key icons (tiles 2220..2226 are the key symbols in the status art).
-        for k in 0..7 {
+        // The six key icons (9x9 tiles 2220..2225; 2226 is a large status graphic, not a key)
+        // sit in a row left of the right panel, so they cover neither its boxes nor the
+        // inventory label above it.
+        const KEY_ICON: i32 = 2220;
+        const KEYS: usize = 6;
+        for k in 0..KEYS {
             if game.player.keys[k] {
                 vtile(
                     frame,
@@ -614,9 +619,9 @@ pub fn status_bar(frame: &mut [u32], w: usize, h: usize, res: &Resources, luts: 
                     h,
                     res,
                     luts,
-                    2220 + k as i32,
-                    rx + 4.0 + (k % 4) as f64 * 9.0,
-                    ry + 4.0 + (k / 4) as f64 * 10.0,
+                    KEY_ICON + k as i32,
+                    rx - 2.0 - (KEYS - k) as f64 * 10.0,
+                    200.0 - 11.0,
                     Anchor::Right,
                     1.0,
                     0,

@@ -31,6 +31,11 @@ pub const AIR_SECONDS: f64 = 20.0;
 /// Projectile sprite types (OpenBlood-internal, outside Blood's editor ranges).
 const PROJ_BASE: i16 = 3000;
 
+/// Thing types with special handling.
+const TNT_BARREL: i16 = 400;
+const WALL_CRACK: i16 = 408;
+const EXPLODER: i16 = 459;
+
 /// Events surfaced to the front end (sounds, messages, level changes).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GameEvent {
@@ -156,8 +161,8 @@ impl Game {
                     continue;
                 }
             }
-            // Switchable traps are hidden while off.
-            if s.lotag == 459 && world.xsprite(i).is_some_and(|x| x.state == 0) {
+            // Exploder markers (type 459) are never drawn; they explode when switched on.
+            if s.lotag == EXPLODER {
                 world.sprites[i].cstat |= SPR_INVISIBLE;
             }
         }
@@ -224,7 +229,51 @@ impl Game {
                 }
             }
         }
+        g.fix_sprite_sectors();
         Ok(g)
+    }
+
+    /// Some maps store pickups, dudes and blocking sprites with the sector number of a
+    /// neighbour, or (in stacked rooms) of a sector at another height. Such a sprite would
+    /// collide, light and draw with the wrong floor, or never be drawn. Reassign it to the
+    /// sector that contains its position and height (or at least its position).
+    fn fix_sprite_sectors(&mut self) {
+        const SLACK: f64 = 256.0;
+        let w = &self.world;
+        let mut moves = Vec::new();
+        for (i, s) in w.sprites.iter().enumerate() {
+            if s.statnum == stat::FREE || s.sectnum < 0 || s.cstat & 48 != 0 {
+                continue;
+            }
+            if !(pickup_of(s.lotag).is_some() || is_dude(s.lotag) || s.cstat & SPR_BLOCK != 0) {
+                continue;
+            }
+            let (x, y, z) = (s.x as f64, s.y as f64, s.z as f64);
+            let fits = |sec: usize| {
+                let (c, f) = w.zs_at(sec, x, y);
+                z >= c - SLACK && z <= f + SLACK
+            };
+            let cur = s.sectnum as usize;
+            if ob_engine::geom::inside_sector(&w.sectors, &w.walls, cur, x, y) && fits(cur) {
+                continue;
+            }
+            let containing: Vec<usize> = (0..w.sectors.len())
+                .filter(|&k| ob_engine::geom::inside_sector(&w.sectors, &w.walls, k, x, y))
+                .collect();
+            let best = containing.iter().copied().find(|&k| fits(k)).or_else(|| {
+                if ob_engine::geom::inside_sector(&w.sectors, &w.walls, cur, x, y) {
+                    None
+                } else {
+                    containing.first().copied()
+                }
+            });
+            if let Some(k) = best.filter(|&k| k != cur) {
+                moves.push((i, k));
+            }
+        }
+        for (i, k) in moves {
+            self.world.sprites[i].sectnum = k as i16;
+        }
     }
 
     fn rand(&mut self) -> u32 {
@@ -267,7 +316,7 @@ impl Game {
             self.tick(res, &inp, step);
         }
         self.damage_flash = (self.damage_flash - dt * 2.0).max(0.0);
-        self.pickup_flash = (self.pickup_flash - dt * 3.0).max(0.0);
+        self.pickup_flash = (self.pickup_flash - dt * 6.0).max(0.0);
     }
 
     fn snapshot(&mut self) {
@@ -368,7 +417,7 @@ impl Game {
             if self.player.dead {
                 self.events.push(GameEvent::PlayerDied);
             } else {
-                self.do_use();
+                self.do_use(res);
             }
         }
         self.use_down = input.use_key;
@@ -406,7 +455,7 @@ impl Game {
         }
         self.triggers.update(&mut self.world);
         self.carry_player();
-        self.handle_notices();
+        self.handle_notices(res);
     }
 
     /// Moves the player along with sliding / rotating sectors they stand in.
@@ -541,7 +590,7 @@ impl Game {
         }
     }
 
-    fn handle_notices(&mut self) {
+    fn handle_notices(&mut self, res: &Resources) {
         let notices: Vec<Notice> = std::mem::take(&mut self.triggers.notices);
         for n in notices {
             match n {
@@ -595,12 +644,12 @@ impl Game {
                                     self.sound(id, None);
                                 }
                             }
-                            if t == 459 {
-                                if st == 1 {
-                                    self.world.sprites[i].cstat &= !SPR_INVISIBLE;
-                                } else {
-                                    self.world.sprites[i].cstat |= SPR_INVISIBLE;
-                                }
+                            if t == EXPLODER && st == 1 {
+                                // Scripted blasts, e.g. a wall giving way after its crack is
+                                // blown (E1M2's wagon). Size and damage are estimates.
+                                let p = self.sprite_pos(i);
+                                let sect = self.world.sprites[i].sectnum as i32;
+                                self.explode(res, p.0, p.1, p.2, sect, 1000.0, 40, false);
                             }
                         }
                         Obj::Sector(_) => {}
@@ -713,7 +762,7 @@ impl Game {
         false
     }
 
-    fn do_use(&mut self) {
+    fn do_use(&mut self, res: &Resources) {
         let p = &self.player;
         let (x, y, z, ang, sect) = (p.x, p.y, p.view_z(), p.ang, p.sector);
         let a = ang_to_rad(ang);
@@ -775,7 +824,7 @@ impl Game {
         if !done {
             self.events.push(GameEvent::UseFailed);
         }
-        self.handle_notices();
+        self.handle_notices(res);
     }
 
     // ------------------------------------------------------------------ animation
@@ -1163,13 +1212,19 @@ impl Game {
             }
             return;
         }
-        // Things with health (barrels, glass, ...): destroy and fire their trigger.
-        if self.world.xsprite(i).is_some() && (self.world.sprites[i].cstat & 256 != 0 || self.world.rt[i].health > 0) {
+        // Things with health (barrels, glass, ...): destroy and fire their trigger. Wall cracks
+        // only give way to explosions (barrels, dynamite).
+        let breakable = if t == WALL_CRACK {
+            explosive
+        } else {
+            self.world.sprites[i].cstat & 256 != 0 || self.world.rt[i].health > 0
+        };
+        if self.world.xsprite(i).is_some() && breakable {
             self.world.rt[i].health -= amount;
             if self.world.rt[i].health <= 0 {
                 self.triggers
                     .trigger(&mut self.world, Obj::Sprite(i), cmd::SPRITE_IMPACT);
-                let is_explosive = matches!(t, 416..=418 | 425..=427);
+                let is_explosive = matches!(t, TNT_BARREL | 416..=418 | 425..=427);
                 self.world.delete_sprite(i);
                 if is_explosive {
                     self.explode(
@@ -1999,7 +2054,17 @@ impl Game {
                 z,
                 picnum: pic,
                 cstat,
-                shade: s.shade as i32,
+                // Sprites take on their sector's (current, light-effected) shade, as in the
+                // original: a zombie in a dark corridor is as dark as the corridor (E2M4), a
+                // tree under the open sky is lit like the sky (E4M9).
+                shade: s.shade as i32
+                    + self.world.sectors.get(s.sectnum.max(0) as usize).map_or(0, |sec| {
+                        if sec.ceiling.stat & ob_engine::render::PLANE_PARALLAX != 0 {
+                            sec.ceiling.shade as i32
+                        } else {
+                            sec.floor.shade as i32
+                        }
+                    }),
                 pal: s.pal,
                 xrepeat: s.xrepeat,
                 yrepeat: s.yrepeat,

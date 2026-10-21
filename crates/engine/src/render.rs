@@ -254,6 +254,19 @@ pub struct Renderer {
     pub stats_kinds: [usize; 5],
 }
 
+/// Distance (xy units) times visibility per shade step.
+const VIS_DIVISOR: f64 = 5.0 * 65536.0;
+
+/// Visibility of sector `si`: the map's global value scaled by the sector's own, stored as a
+/// signed byte offset (0 = use the global value).
+fn sector_vis(scene: &Scene, si: i32) -> f64 {
+    let vis = scene.visibility as f64;
+    match usize::try_from(si).ok().and_then(|i| scene.sectors.get(i)) {
+        Some(sec) if sec.visibility != 0 => vis * ((sec.visibility as u32 + 16) & 255) as f64 / 16.0,
+        _ => vis,
+    }
+}
+
 #[inline]
 fn shade_index(shade: i32) -> usize {
     shade.clamp(0, NUM_SHADES as i32 - 1) as usize * 256
@@ -356,7 +369,9 @@ impl Renderer {
     /// Distance in xy units for a depth value (used for fog/visibility shading).
     #[inline]
     fn vis_shade(vis: f64, t: f64) -> i32 {
-        (t * vis / 1048576.0) as i32
+        // Fitted to DOSBox captures of nine map starts (mean block-brightness error 7.4 ->
+        // 4.3 on a 0-255 scale): distance darkens about 3.2x faster than the old 1/2^20.
+        (t * vis / VIS_DIVISOR) as i32
     }
 
     pub fn render(&mut self, scene: &Scene, cam: &Camera) {
@@ -582,8 +597,6 @@ fn cast_column(
     let _ = &mut filled_to_top;
     let sectors = scene.sectors;
     let walls = scene.walls;
-    let vis = scene.visibility as f64;
-
     for _ in 0..1024 {
         if sect < 0 || sect as usize >= sectors.len() {
             break;
@@ -591,11 +604,7 @@ fn cast_column(
         let si = sect as usize;
         visited[si].store(1, Ordering::Relaxed);
         let sec = &sectors[si];
-        let vis_s = if sec.visibility != 0 {
-            vis * ((sec.visibility as u32 + 16) & 255) as f64 / 16.0
-        } else {
-            vis
-        };
+        let vis_s = sector_vis(scene, si as i32);
 
         // Find exit wall: nearest crossing beyond the entry distance.
         let mut best: Option<(f64, f64, usize)> = None;
@@ -986,7 +995,7 @@ fn sample_plane(scene: &Scene, si: usize, floor: bool, px: f64, py: f64, t: f64)
     let lut = scene.luts.get(plane.pal);
     let pic = scene.tiles.animate(plane.picnum as i32, scene.clock);
     let tile = scene.tiles.get(pic);
-    let sh = shade_index(plane.shade as i32 + Renderer::vis_shade(scene.visibility as f64, t));
+    let sh = shade_index(plane.shade as i32 + Renderer::vis_shade(sector_vis(scene, si as i32), t));
     if tile.is_empty() {
         return lut[sh];
     }
@@ -1020,10 +1029,21 @@ fn sample_plane(scene: &Scene, si: usize, floor: bool, px: f64, py: f64, t: f64)
 
 /// Texture colour of a wall at position `s` (0..1 along it) and height `z`.
 #[allow(clippy::too_many_arguments)]
-fn sample_wall(scene: &Scene, wall: &Wall, picnum: i16, xpan: u8, ypan: u8, s: f64, z: f64, zref: f64, t: f64) -> u32 {
+fn sample_wall(
+    scene: &Scene,
+    si: usize,
+    wall: &Wall,
+    picnum: i16,
+    xpan: u8,
+    ypan: u8,
+    s: f64,
+    z: f64,
+    zref: f64,
+    t: f64,
+) -> u32 {
     let lut = scene.luts.get(wall.pal);
     let tile = scene.tiles.get(scene.tiles.animate(picnum as i32, scene.clock));
-    let sh = shade_index(wall.shade as i32 + Renderer::vis_shade(scene.visibility as f64, t));
+    let sh = shade_index(wall.shade as i32 + Renderer::vis_shade(sector_vis(scene, si as i32), t));
     if tile.is_empty() {
         return lut[sh];
     }
@@ -1200,7 +1220,7 @@ fn trace_column(
                     sec.ceiling.z
                 } as f64;
                 return (
-                    sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
+                    sample_wall(scene, si, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
                     t,
                 );
             }
@@ -1213,7 +1233,7 @@ fn trace_column(
                         sectors[ns].ceiling.z
                     } as f64;
                     return (
-                        sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
+                        sample_wall(scene, si, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, t),
                         t,
                     );
                 }
@@ -1229,7 +1249,7 @@ fn trace_column(
                         sectors[ns].floor.z
                     } as f64;
                     return (
-                        sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, t),
+                        sample_wall(scene, si, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, t),
                         t,
                     );
                 }
@@ -1319,7 +1339,7 @@ fn trace_pixel(
                 sec.ceiling.z
             } as f64;
             return (
-                sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
+                sample_wall(scene, si, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
                 tt,
             );
         }
@@ -1332,7 +1352,7 @@ fn trace_pixel(
                 sectors[ns].ceiling.z
             } as f64;
             return (
-                sample_wall(scene, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
+                sample_wall(scene, si, w, w.picnum, w.xpanning, w.ypanning, u, hz, zref, tt),
                 tt,
             );
         }
@@ -1348,7 +1368,7 @@ fn trace_pixel(
                 sectors[ns].floor.z
             } as f64;
             return (
-                sample_wall(scene, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, tt),
+                sample_wall(scene, si, w, src.picnum, src.xpanning, src.ypanning, u, hz, zref, tt),
                 tt,
             );
         }
@@ -1508,7 +1528,7 @@ fn draw_masked(x: usize, m: &MaskSeg, scene: &Scene, cam: &Camera, view: &View, 
     let r0 = (m.ytop as f64).max(0.0).ceil() as usize;
     let r1 = ((m.ybot as f64).min(h).ceil() as isize).max(0) as usize;
     let t = m.t as f64;
-    let vis = scene.visibility as f64;
+    let vis = sector_vis(scene, m.sect as i32);
     let lut = scene.luts.get(wall.pal);
     let sh = shade_index(wall.shade as i32 + Renderer::vis_shade(vis, t));
     let tw = tile.width as i64;
@@ -1580,17 +1600,17 @@ fn project_voxel(
     // KVX x runs along the sprite's facing, y across it (the flat tile's horizontal axis).
     let w = (a.cos(), a.sin());
     let f = (-a.sin(), a.cos());
-    // One voxel is a quarter of a sprite texel at the same repeat.
-    let unit = s.xrepeat as f64 / 16.0;
-    let zunit = s.yrepeat as f64;
+    // One voxel is one sprite texel at the same repeat, and the model stands on the sprite's
+    // z even when the sprite is flagged as centred. Both fitted to DOSBox captures of voxel
+    // crates at the E4M9 and E2M4 starts (22x14 px and 13x8 px in the original; a quarter
+    // texel per voxel drew them 6 px wide, half sunk into the floor).
+    let unit = s.xrepeat as f64 / 4.0;
+    let zunit = s.yrepeat as f64 * 4.0;
     if unit <= 0.0 || zunit <= 0.0 {
         return None;
     }
     let height = v.zs as f64 * zunit;
-    let mut zbot = s.z;
-    if s.cstat & SPR_CENTER != 0 {
-        zbot += height * 0.5;
-    }
+    let zbot = s.z;
     let ztop = zbot - height;
     // Project the model's bounding box.
     let half_w = view.w as f64 * 0.5;
@@ -1827,7 +1847,7 @@ fn draw_sprite_column(
     let th = tile.height as i64;
     let xc = x as f32 + 0.5;
     let lut = scene.luts.get(s.pal);
-    let vis = scene.visibility as f64;
+    let vis = sector_vis(scene, s.sector);
     let trans = s.cstat & SPR_TRANS != 0;
     let rev = s.cstat & SPR_TRANS_REV != 0;
     let xflip = s.cstat & SPR_XFLIP != 0;

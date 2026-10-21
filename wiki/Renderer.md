@@ -36,8 +36,16 @@ reads it directly, so the frame is never transposed.
 - **Parallax skies:** sampled by view angle with the map's sky tile offsets.
 - **Texture wrapping:** almost every Build texture is a power of two, so `wrap()` masks
   instead of dividing.
-- **Shading:** distance shading from the map's global visibility plus sector/sprite shade,
-  looked up in the true-colour `ShadeLuts`.
+- **Shading:** surface shade plus distance shading, looked up in the true-colour `ShadeLuts`.
+  Distance adds `distance × visibility / (5 × 65536)` shade steps, where visibility is the map's
+  global value scaled by the sector's own (`sector_vis`, used everywhere: walls, planes,
+  surfaces seen through room-over-room portals, masked walls and sprites). The divisor was
+  fitted to DOSBox captures of nine map starts (mean block-brightness error 7.4 → 4.3).
+- **Sprite lighting:** a sprite adds its sector's current floor shade, or the ceiling shade under
+  an open sky, so enemies in a dark corridor are as dark as the corridor (E2M4) and a tree in a
+  sunlit courtyard stays bright (E4M9).
+- **Voxels:** one voxel per sprite texel (`xrepeat / 4` xy units), the model standing on the
+  sprite's z. Fitted to the voxel crates visible at the E4M9 and E2M4 starts.
 
 ## Sprites
 

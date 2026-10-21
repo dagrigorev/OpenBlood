@@ -64,6 +64,144 @@ fn every_level_loads_and_simulates() {
     }
 }
 
+/// State and busy value of an x-object and of everything listening on its channel.
+fn reaction_print(g: &Game, kind: char, i: usize) -> Vec<(u8, u32)> {
+    let w = &g.world;
+    let (own, tx) = match kind {
+        'w' => w.xwall(i).map(|x| ((x.state, x.busy), x.tx_id)).unwrap(),
+        's' => w.xsector(i).map(|x| ((x.state, x.busy), x.tx_id)).unwrap(),
+        _ => w.xsprite(i).map(|x| ((x.state, x.busy), x.tx_id)).unwrap(),
+    };
+    let mut v = vec![own];
+    if tx > 0 {
+        v.extend(
+            (0..w.sectors.len()).filter_map(|s| w.xsector(s).filter(|x| x.rx_id == tx).map(|x| (x.state, x.busy))),
+        );
+        v.extend((0..w.walls.len()).filter_map(|j| w.xwall(j).filter(|x| x.rx_id == tx).map(|x| (x.state, x.busy))));
+        v.extend(
+            (0..w.sprites.len()).filter_map(|j| w.xsprite(j).filter(|x| x.rx_id == tx).map(|x| (x.state, x.busy))),
+        );
+    }
+    v
+}
+
+/// Integrity: every unlocked wall, sector and sprite flagged as pushable reacts to "use"
+/// (its own state changes, or something on its channel does). Exception: E4M6 sprite 61, a
+/// toggle switch that sends on its own receive channel and so toggles itself straight back.
+#[test]
+fn pushable_objects_react() {
+    let Some(r) = res() else { return };
+    let idle = ob_game::player::Input::default();
+    let names: Vec<String> = r
+        .blood
+        .entries
+        .iter()
+        .filter(|e| e.ext == "MAP")
+        .map(|e| e.name.clone())
+        .collect();
+    let mut dead = Vec::new();
+    let mut total = 0;
+    for name in names {
+        let mut g = Game::load_level(&r, &name).unwrap();
+        g.triggers.send(&mut g.world, 7, 1);
+        for _ in 0..240 {
+            g.update(&r, &idle, 1.0 / 120.0);
+        }
+        let mut cands: Vec<(char, usize)> = Vec::new();
+        cands.extend(
+            (0..g.world.walls.len())
+                .filter(|&w| {
+                    g.world
+                        .xwall(w)
+                        .is_some_and(|x| x.trigger_push && !x.locked && x.key == 0)
+                })
+                .map(|w| ('w', w)),
+        );
+        cands.extend(
+            (0..g.world.sectors.len())
+                .filter(|&s| g.world.xsector(s).is_some_and(|x| x.push && !x.locked && x.key == 0))
+                .map(|s| ('s', s)),
+        );
+        cands.extend(
+            (0..g.world.sprites.len())
+                .filter(|&i| {
+                    let s = &g.world.sprites[i];
+                    // Invisible helper sprites can't be reached by the player.
+                    s.statnum != ob_game::world::stat::FREE
+                        && s.cstat & 0x8000 == 0
+                        && g.world.xsprite(i).is_some_and(|x| x.push && !x.locked && x.key == 0)
+                })
+                .map(|i| ('p', i)),
+        );
+        let gone = |g: &Game, kind: char, i: usize| {
+            kind == 'p' && (g.world.sprites[i].statnum == ob_game::world::stat::FREE || g.world.xsprite(i).is_none())
+        };
+        for (kind, i) in cands {
+            // Earlier pushes may have blown this object up (barrels, exploders).
+            if gone(&g, kind, i) {
+                continue;
+            }
+            // An earlier push may have locked this object through its channel.
+            let locked_now = match kind {
+                'w' => g.world.xwall(i).is_some_and(|x| x.locked),
+                's' => g.world.xsector(i).is_some_and(|x| x.locked),
+                _ => g.world.xsprite(i).is_some_and(|x| x.locked),
+            };
+            if locked_now {
+                continue;
+            }
+            total += 1;
+            let before = reaction_print(&g, kind, i);
+            let pushed = match kind {
+                'w' => g.triggers.push_wall(&mut g.world, i),
+                's' => g.triggers.push_sector(&mut g.world, i),
+                _ => g.triggers.push_sprite(&mut g.world, i),
+            };
+            for _ in 0..30 {
+                g.update(&r, &idle, 1.0 / 120.0);
+            }
+            if gone(&g, kind, i) {
+                continue; // destroyed by its own push: it reacted
+            }
+            if !pushed || reaction_print(&g, kind, i) == before {
+                dead.push(format!("{name} {kind}{i}"));
+            }
+        }
+    }
+    eprintln!("pushable objects: {total}, no reaction: {dead:?}");
+    assert!(total > 1000, "only {total} pushable objects found");
+    assert_eq!(dead, vec!["E4M6 p61".to_string()]);
+}
+
+/// Integrity: after loading, every pickup and dude stands inside the sector it belongs to
+/// (some maps store a neighbour's sector number; the loader corrects it).
+#[test]
+fn pickups_and_dudes_are_in_their_sectors() {
+    let Some(r) = res() else { return };
+    let names: Vec<String> = r
+        .blood
+        .entries
+        .iter()
+        .filter(|e| e.ext == "MAP")
+        .map(|e| e.name.clone())
+        .collect();
+    let mut wrong = Vec::new();
+    for name in names {
+        let g = Game::load_level(&r, &name).unwrap();
+        let w = &g.world;
+        for (i, s) in w.sprites.iter().enumerate() {
+            let relevant = ob_game::items::pickup_of(s.lotag).is_some() || (200..260).contains(&s.lotag);
+            if !relevant || s.statnum == ob_game::world::stat::FREE || s.sectnum < 0 || s.cstat & 48 != 0 {
+                continue;
+            }
+            if !ob_engine::geom::inside_sector(&w.sectors, &w.walls, s.sectnum as usize, s.x as f64, s.y as f64) {
+                wrong.push(format!("{name} sprite {i} type {} sector {}", s.lotag, s.sectnum));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:?}");
+}
+
 #[test]
 fn player_dives_through_water_link() {
     let Some(r) = res() else { return };
