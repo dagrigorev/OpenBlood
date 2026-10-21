@@ -215,8 +215,9 @@ pub fn draw(
         }
     }
     tint(frame, (255.0, 0.0, 0.0), game.damage_flash * 0.6);
-    // A brief, light flash: the original shows no visible tint ~0.2 s after a pickup.
-    tint(frame, (255.0, 230.0, 120.0), game.pickup_flash * 0.12);
+    // A strong, short flash: in a recording of the E2M1 start the original is clearly yellow
+    // at 0.125 s after the pickup, fainter at 0.25 s and clear by 0.375 s.
+    tint(frame, (255.0, 230.0, 120.0), game.pickup_flash * 0.25);
     // Crosshair.
     let (cx, cy) = (w as i32 / 2, h as i32 / 2 - (10 * h as i32 / 200));
     for d in -2 * s..=2 * s {

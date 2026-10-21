@@ -31,6 +31,9 @@ pub const AIR_SECONDS: f64 = 20.0;
 /// Projectile sprite types (OpenBlood-internal, outside Blood's editor ranges).
 const PROJ_BASE: i16 = 3000;
 
+/// Horizontal distance (xy units) within which the player takes an item.
+const PICKUP_REACH: f64 = 768.0;
+
 /// Thing types with special handling.
 const TNT_BARREL: i16 = 400;
 const WALL_CRACK: i16 = 408;
@@ -316,7 +319,7 @@ impl Game {
             self.tick(res, &inp, step);
         }
         self.damage_flash = (self.damage_flash - dt * 2.0).max(0.0);
-        self.pickup_flash = (self.pickup_flash - dt * 6.0).max(0.0);
+        self.pickup_flash = (self.pickup_flash - dt * 3.0).max(0.0);
     }
 
     fn snapshot(&mut self) {
@@ -1882,11 +1885,9 @@ impl Game {
             let t = s.lotag;
             let sz = s.z as f64;
             if let Some((pick, msg)) = pickup_of(t) {
-                if s.cstat & SPR_INVISIBLE != 0
-                    || d > 96.0 + crate::player::RADIUS
-                    || sz < top
-                    || sz > pz + 0x1000 as f64
-                {
+                // Reach measured from the original: items 689 units away are taken at the
+                // E2M1 start, items 1024+ away are not (E1M4, E1M7, E4M2, E3M5).
+                if s.cstat & SPR_INVISIBLE != 0 || d > PICKUP_REACH || sz < top || sz > pz + 0x1000 as f64 {
                     continue;
                 }
                 if self.apply_pickup(pick) {

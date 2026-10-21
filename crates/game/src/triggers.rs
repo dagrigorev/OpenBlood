@@ -66,6 +66,9 @@ pub mod sector_type {
     pub const COUNTER: i16 = 619;
 }
 
+/// Sprite flag: the sprite moves with its (moving) sector.
+pub const MOVES_WITH_SECTOR: u16 = 0x2000;
+
 /// Wall flags used by sliding sectors.
 pub const WALL_MOVE_FORWARD: u16 = 0x4000;
 pub const WALL_MOVE_REVERSE: u16 = 0x8000;
@@ -736,11 +739,14 @@ impl Triggers {
         let nc = x.off_ceil_z as f64 + (x.on_ceil_z - x.off_ceil_z) as f64 * f;
         world.sectors[s].floor.z = nf.round() as i32;
         world.sectors[s].ceiling.z = nc.round() as i32;
-        // Carry sprites resting on the floor.
+        // Carry sprites resting on the floor, and sprites flagged to move with their sector
+        // (cstat 0x2000: pickups on lifts and boats, e.g. E3M1's lift 282) wherever they are.
         let dz = world.sectors[s].floor.z - old_floor;
         if dz != 0 {
             for sp in world.sprites.iter_mut() {
-                if sp.sectnum as usize == s && sp.statnum != crate::world::stat::FREE && (sp.z - old_floor).abs() <= 256
+                if sp.sectnum as usize == s
+                    && sp.statnum != crate::world::stat::FREE
+                    && ((sp.z - old_floor).abs() <= 256 || sp.cstat & MOVES_WITH_SECTOR != 0)
                 {
                     sp.z += dz;
                 }
