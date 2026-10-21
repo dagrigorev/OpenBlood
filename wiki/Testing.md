@@ -35,6 +35,8 @@ The data never enters the repository.
 | `tiles_and_palette_load` | > 3000 non-empty tiles, palette and PLU sizes |
 | `all_seq_and_qav_parse` | every animation parses |
 | `every_level_loads_and_simulates` | each level loads and runs without panicking |
+| `pushable_objects_react` | every unlocked pushable wall, sector and sprite in all maps reacts to "use" (one documented self-looping switch excepted) |
+| `pickups_and_dudes_are_in_their_sectors` | after loading, no pickup or enemy is outside the sector it belongs to |
 | `player_dives_through_water_link` | room-over-room transition into water |
 | `gunfire_scares_innocents_and_wakes_cultists` | hearing and fleeing AI |
 | `shotgun_alt_fire_uses_two_shells` | alternate fire ammo use |
