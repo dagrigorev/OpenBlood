@@ -704,18 +704,37 @@ impl App {
     }
 }
 
+/// The OpenBlood window icon (assets/icon-256.png, built into the executable).
+fn app_icon() -> Option<winit::window::Icon> {
+    const PNG: &[u8] = include_bytes!("../../../assets/icon-256.png");
+    let mut dec = png::Decoder::new(PNG);
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+        png::ColorType::Rgb => buf[..info.buffer_size()]
+            .chunks(3)
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect(),
+        _ => return None,
+    };
+    winit::window::Icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
-        let mut attrs =
-            Window::default_attributes()
-                .with_title("OpenBlood")
-                .with_inner_size(winit::dpi::LogicalSize::new(
-                    self.cfg.window_width,
-                    self.cfg.window_height,
-                ));
+        let mut attrs = Window::default_attributes()
+            .with_title("OpenBlood")
+            .with_window_icon(app_icon())
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                self.cfg.window_width,
+                self.cfg.window_height,
+            ));
         if self.cfg.fullscreen {
             attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }

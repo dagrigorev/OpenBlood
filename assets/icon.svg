@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- OpenBlood icon: a blood drop with a pitchfork cut out of it. Original artwork. -->
+  <defs>
+    <clipPath id="drop">
+      <path d="M128 26 C128 26 52 110 52 160 A76 76 0 0 0 204 160 C204 110 128 26 128 26 Z"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="#141016"/>
+  <!-- Two-tone flat drop: lit left half, shaded right half. -->
+  <path d="M128 26 C128 26 52 110 52 160 A76 76 0 0 0 204 160 C204 110 128 26 128 26 Z" fill="#D0162F"/>
+  <rect x="128" y="0" width="128" height="256" fill="#A50F25" clip-path="url(#drop)"/>
+  <!-- Pitchfork in negative space. -->
+  <g fill="#141016">
+    <path d="M92 150 V96 L97 84 L102 96 V150 Z"/>
+    <path d="M123 150 V86 L128 72 L133 86 V150 Z"/>
+    <path d="M154 150 V96 L159 84 L164 96 V150 Z"/>
+    <rect x="88" y="142" width="80" height="13" rx="6.5"/>
+    <rect x="121" y="150" width="14" height="66" rx="7"/>
+  </g>
+</svg>
