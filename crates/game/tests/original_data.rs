@@ -346,12 +346,22 @@ fn walking_acceleration_matches_original() {
 /// Reference: DOSBox recordings of E4M9's start, player idle (2026-10-20/21; the original is
 /// deterministic, every run on every skill hits at the same moments). Times are from the
 /// first frame showing the level: hits at 4.18, 4.98, 5.58, 6.65, 7.45 s, death 7.53 s on
-/// skill 2. Damage per hit on skills 0-4: 10-11, 14-15, 18, 21-22, 26.
+/// skill 2. Damage per hit on skills 0-4: 10-11, 14-15, 18, 21-22, 26. Skill 4 (2026-10-22):
+/// same hit times, death on the fourth hit at 6.65 s.
+///
+/// The DOS `-skill` switch used for these recordings changes damage but not which sprites
+/// spawn: every run shows the skill-2 set of four zombies. So the level is loaded on skill 2
+/// and only the damage skill is changed.
+///
+/// Known gap, skill 0 (2026-10-22): from 7.45 s the original's other zombies, held up behind
+/// the planter until then, swing together (hits at 7.45, 7.65, ~7.8, 8.25, 8.35, 8.58 s,
+/// death ~8.6 s); OpenBlood's arrive by ~5.5 s but take turns, so it dies at ~10.5 s.
 #[test]
 fn axe_zombie_ambush_matches_original() {
     let Some(r) = res() else { return };
     for (skill, per_hit) in [(2, 18), (0, 10), (1, 15), (3, 21), (4, 26)] {
-        let mut g = Game::load_level_skill(&r, "E4M9", skill).unwrap();
+        let mut g = Game::load_level_skill(&r, "E4M9", 2).unwrap();
+        g.skill = skill;
         let idle = ob_game::player::Input::default();
         let mut hits = Vec::new();
         let mut hp = g.player.health;
@@ -369,9 +379,12 @@ fn axe_zombie_ambush_matches_original() {
         let (first, dmg) = hits[0];
         assert!((3.9..5.0).contains(&first), "first hit at {first:.2}s");
         assert!((dmg - per_hit).abs() <= 1, "hit damage {dmg}, want {per_hit}");
+        let death = hits.last().unwrap().0;
         if skill == 2 {
-            let death = hits.last().unwrap().0;
             assert!(g.player.dead && (6.8..8.3).contains(&death), "death at {death:.2}s");
+        }
+        if skill == 4 {
+            assert!(g.player.dead && (5.9..7.3).contains(&death), "death at {death:.2}s");
         }
     }
 }
