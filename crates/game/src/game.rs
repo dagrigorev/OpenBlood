@@ -21,6 +21,8 @@ pub mod save;
 
 /// Game clock rate.
 pub const TICK_RATE: f64 = 120.0;
+/// Speed (units/s) a melee hit adds to the player, away from the attacker.
+const MELEE_KNOCKBACK: f64 = 3000.0;
 /// Reach of the "use" action in xy units.
 pub const USE_RANGE: f64 = 768.0;
 /// Pseudo sprite id used for the player in traces.
@@ -345,7 +347,11 @@ impl Game {
     }
 
     fn obstacles(&self) -> Vec<CircleObstacle> {
-        let (px, py) = (self.player.x, self.player.y);
+        self.obstacles_near(self.player.x, self.player.y)
+    }
+
+    /// Blocking sprites within 2048 units of (px, py), as collision circles.
+    fn obstacles_near(&self, px: f64, py: f64) -> Vec<CircleObstacle> {
         self.world
             .sprites
             .iter()
@@ -1039,6 +1045,10 @@ impl Game {
             Attack::Melee { damage, range } => {
                 if d < range + info.radius + crate::player::RADIUS + 32.0 && (pz - sz).abs() < 0x4000 as f64 {
                     self.damage_player(damage, Some(i));
+                    // Blows shove the player back: in the E4M9 recordings each axe hit moves
+                    // the player ~300 units.
+                    self.player.vx += (px - sx) / d * MELEE_KNOCKBACK;
+                    self.player.vy += (py - sy) / d * MELEE_KNOCKBACK;
                 }
             }
             Attack::Hitscan {

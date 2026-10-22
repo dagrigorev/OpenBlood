@@ -172,6 +172,14 @@ impl Game {
     /// obstacle briskly, like the E4M9 axe zombies around the central planter in the original.
     fn dude_walk(&mut self, i: usize, info: &DudeInfo, ang: f64, dist: f64) -> bool {
         let m = Self::dude_mover(info);
+        // Scenery that blocks (the E4M9 planter's tree, ...); other dudes are kept apart by
+        // `crowded`.
+        let (sx, sy) = (self.world.sprites[i].x as f64, self.world.sprites[i].y as f64);
+        let obstacles: Vec<_> = self
+            .obstacles_near(sx, sy)
+            .into_iter()
+            .filter(|o| !is_dude(self.world.sprites[o.id].lotag))
+            .collect();
         for min_part in [0.9, 0.3] {
             for k in [0.0, 0.7, -0.7, 1.4, -1.4] {
                 let a = ang + k;
@@ -180,7 +188,7 @@ impl Game {
                 let (nx, ny, ns, _) = collide::clip_move(
                     &self.world.sectors,
                     &self.world.walls,
-                    &[],
+                    &obstacles,
                     x,
                     y,
                     z,
